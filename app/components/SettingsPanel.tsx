@@ -18,6 +18,7 @@ import type {
   ProviderPreset,
 } from "../types";
 import { getActiveProvider } from "../types";
+import { MarkdownView } from "./MarkdownView";
 
 type SettingsTab = "connection" | "generation" | "mcp";
 
@@ -367,7 +368,7 @@ export function SettingsPanel({
                 />
               </label>
 
-              <label className="field-group">
+              <div className="field-group">
                 <span className="field-label">시작 메시지</span>
                 <textarea
                   value={conversationSettings.openingMessage}
@@ -375,8 +376,19 @@ export function SettingsPanel({
                   placeholder="대화 시작 상황 · 마크다운 및 이미지 문법 지원"
                   rows={6}
                 />
-                <small>현재 대화 상단에 표시되며 첫 assistant 문맥으로 전송</small>
-              </label>
+                <small>
+                  현재 대화 상단에 표시되며 첫 assistant 문맥으로 전송 · 마크다운 이미지: ![설명](URL)
+                </small>
+                {conversationSettings.openingMessage.trim() && (
+                  <section className="opening-preview" aria-label="시작 메시지 미리보기">
+                    <span>미리보기</span>
+                    <MarkdownView
+                      content={conversationSettings.openingMessage}
+                      imageWidth={settings.markdownImageWidth}
+                    />
+                  </section>
+                )}
+              </div>
 
               <label className="field-group range-field">
                 <span className="field-label">

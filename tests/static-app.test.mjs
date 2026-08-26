@@ -201,8 +201,15 @@ test("supports a per-conversation markdown opening message", async () => {
   assert.match(planner, /estimateTextTokens\(settings\.openingMessage\)/);
   assert.match(settings, />시작 메시지</);
   assert.match(settings, /updateConversation\("openingMessage"/);
+  assert.match(settings, /aria-label="시작 메시지 미리보기"/);
+  assert.match(settings, /content=\{conversationSettings\.openingMessage\}/);
+  assert.match(settings, /imageWidth=\{settings\.markdownImageWidth\}/);
   assert.match(messageList, /function OpeningMessage/);
   assert.match(messageList, /<MarkdownView content=\{content\} imageWidth=\{imageWidth\}/);
+  assert.match(
+    page,
+    /conversation\.messages\.length === 0 && !conversation\.settings\.openingMessage\.trim\(\)/,
+  );
 });
 
 test("uses one shared image scale and renders user messages as markdown", async () => {
