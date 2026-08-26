@@ -66,6 +66,7 @@ export interface ConversationSettings {
   model: string;
   vision: boolean;
   systemPrompt: string;
+  openingMessage: string;
   temperature: number;
   maxTokens: number;
   contextLimit: number;
@@ -106,6 +107,7 @@ export interface AppSettings {
   historyTurns: number;
   autoTrimContext: boolean;
   stream: boolean;
+  markdownImageWidth: number;
   theme: "dark" | "light";
   mcpEnabled: boolean;
   mcpUrl: string;
@@ -148,6 +150,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   historyTurns: 20,
   autoTrimContext: true,
   stream: true,
+  markdownImageWidth: 100,
   theme: "dark",
   mcpEnabled: false,
   mcpUrl: "https://mcp.exa.ai/mcp",

@@ -597,6 +597,10 @@ a:focus-visible {
   border-bottom: 0;
 }
 
+.opening-message {
+  border-bottom-color: var(--line-strong);
+}
+
 .role-icon {
   display: grid;
   width: 28px;
@@ -1337,9 +1341,6 @@ a:focus-visible {
 }
 
 .markdown-image-caption > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.markdown-image label { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
-.markdown-image input[type="range"] { width: 72px; accent-color: var(--accent); }
-.markdown-image output { min-width: 28px; font-family: var(--font-geist-mono), monospace; }
 .image-error { display: inline-flex; align-items: center; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
 
 /* Settings */

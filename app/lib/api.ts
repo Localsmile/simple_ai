@@ -148,10 +148,14 @@ export function buildApiMessages(
   messages: ChatMessage[],
   systemPrompt: string,
   visionEnabled: boolean,
+  openingMessage = "",
 ): ApiMessage[] {
   const apiMessages: ApiMessage[] = [];
   if (systemPrompt.trim()) {
     apiMessages.push({ role: "system", content: systemPrompt.trim() });
+  }
+  if (openingMessage.trim()) {
+    apiMessages.push({ role: "assistant", content: openingMessage.trim() });
   }
 
   for (const message of messages) {

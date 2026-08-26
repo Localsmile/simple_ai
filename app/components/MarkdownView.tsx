@@ -36,8 +36,15 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   );
 }
 
-function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
-  const [width, setWidth] = useState(100);
+function MarkdownImage({
+  src,
+  alt,
+  width,
+}: {
+  src?: string;
+  alt?: string;
+  width: number;
+}) {
   const [failed, setFailed] = useState(false);
   if (!src) return null;
 
@@ -58,18 +65,6 @@ function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
       )}
       <span className="markdown-image-caption">
         <span>{alt || "이미지"}</span>
-        <label>
-          <span className="sr-only">이미지 크기</span>
-          <input
-            type="range"
-            min="30"
-            max="100"
-            step="5"
-            value={width}
-            onInput={(event) => setWidth(Number(event.currentTarget.value))}
-          />
-          <output>{width}%</output>
-        </label>
       </span>
     </span>
   );
@@ -80,7 +75,14 @@ function safeUrlTransform(url: string): string {
   return defaultUrlTransform(url);
 }
 
-export const MarkdownView = memo(function MarkdownView({ content }: { content: string }) {
+export const MarkdownView = memo(function MarkdownView({
+  content,
+  imageWidth = 100,
+}: {
+  content: string;
+  imageWidth?: number;
+}) {
+  const normalizedImageWidth = Math.min(100, Math.max(30, imageWidth));
   return (
     <div className="markdown-body">
       <ReactMarkdown
@@ -90,7 +92,11 @@ export const MarkdownView = memo(function MarkdownView({ content }: { content: s
         components={{
           pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
           img: ({ src, alt }) => (
-            <MarkdownImage src={typeof src === "string" ? src : undefined} alt={alt} />
+            <MarkdownImage
+              src={typeof src === "string" ? src : undefined}
+              alt={alt}
+              width={normalizedImageWidth}
+            />
           ),
           a: ({ href, children }) => (
             <a href={href} target="_blank" rel="noreferrer noopener">

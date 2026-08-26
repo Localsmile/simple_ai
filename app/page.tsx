@@ -89,6 +89,7 @@ function conversationSettingsFromApp(settings: AppSettings): ConversationSetting
     model: provider.model,
     vision: provider.vision,
     systemPrompt: "",
+    openingMessage: "",
     temperature: settings.temperature,
     maxTokens: settings.maxTokens,
     contextLimit: settings.contextLimit,
@@ -139,6 +140,7 @@ function normalizeConversation(
       systemPrompt: typeof stored?.systemPrompt === "string"
         ? stored.systemPrompt
         : appSettings.systemPrompt,
+      openingMessage: typeof stored?.openingMessage === "string" ? stored.openingMessage : "",
       temperature: typeof stored?.temperature === "number"
         ? stored.temperature
         : appSettings.temperature,
@@ -512,10 +514,16 @@ export default function Home() {
       settings: nextSettings,
     };
     setConversation(nextConversation);
-    setHistory((current) => current.map((item) =>
-      item.id === nextConversation.id ? nextConversation : item,
-    ));
-    if (nextConversation.messages.length) void saveConversation(nextConversation);
+    setHistory((current) => {
+      const exists = current.some((item) => item.id === nextConversation.id);
+      if (exists) {
+        return current.map((item) => item.id === nextConversation.id ? nextConversation : item);
+      }
+      return nextSettings.openingMessage.trim() ? [nextConversation, ...current] : current;
+    });
+    if (nextConversation.messages.length || nextSettings.openingMessage.trim()) {
+      void saveConversation(nextConversation);
+    }
   }, [conversation]);
 
   const changeSettings = useCallback(
@@ -933,6 +941,7 @@ export default function Home() {
       requestContextMessages,
       seedConversation.settings.systemPrompt,
       seedConversation.settings.vision,
+      seedConversation.settings.openingMessage,
     );
     let accumulated = "";
     let accumulatedReasoning = "";
@@ -1023,10 +1032,13 @@ export default function Home() {
         if (round === 4) throw new Error("MCP 도구 호출 한도에 도달했습니다.");
       }
 
+      const promoteReasoningToContent = !accumulated.trim() && Boolean(accumulatedReasoning.trim());
       const completedResponse: ChatMessage = {
         ...assistantMessage,
-        content: accumulated || "응답 본문이 비어 있습니다.",
-        reasoning: accumulatedReasoning || undefined,
+        content: promoteReasoningToContent
+          ? accumulatedReasoning
+          : accumulated || "응답 본문이 비어 있습니다.",
+        reasoning: promoteReasoningToContent ? undefined : accumulatedReasoning || undefined,
         usage: usage.total > 0 ? usage : undefined,
         toolEvents,
         contextTrim,
@@ -1377,7 +1389,7 @@ export default function Home() {
         </header>
 
         <div className="messages-scroll" ref={scrollRef} onScroll={handleMessagesScroll}>
-          {conversation.messages.length === 0 ? (
+          {conversation.messages.length === 0 && !conversation.settings.openingMessage.trim() ? (
             <div className="empty-state">
               <div className="empty-orbit"><Bot size={27} /></div>
               <span className="eyebrow">OPENAI-COMPATIBLE WORKSPACE</span>
@@ -1400,6 +1412,8 @@ export default function Home() {
           ) : (
             <MessageList
               messages={conversation.messages}
+              openingMessage={conversation.settings.openingMessage}
+              imageWidth={settings.markdownImageWidth}
               editingMessageId={editingMessageId}
               editingContent={editingContent}
               copiedId={copiedId}

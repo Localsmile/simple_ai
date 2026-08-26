@@ -137,6 +137,9 @@ export function loadSettings(): AppSettings {
     providerPresets: presetsWithKeys,
     activeProviderId,
     rememberCredentials,
+    markdownImageWidth: typeof saved.markdownImageWidth === "number"
+      ? Math.min(100, Math.max(30, saved.markdownImageWidth))
+      : DEFAULT_SETTINGS.markdownImageWidth,
     mcpToken: credentialStore.getItem(MCP_TOKEN_KEY) || "",
   };
 }

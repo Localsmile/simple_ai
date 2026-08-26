@@ -25,6 +25,8 @@ type MessageVariantAction = (messageId: string, variantId: string) => void | Pro
 
 interface MessageListProps {
   messages: ChatMessage[];
+  openingMessage: string;
+  imageWidth: number;
   editingMessageId: string;
   editingContent: string;
   copiedId: string;
@@ -81,7 +83,13 @@ const PendingResponse = memo(function PendingResponse({ startedAt }: { startedAt
   );
 });
 
-const ReasoningBlock = memo(function ReasoningBlock({ reasoning }: { reasoning: string }) {
+const ReasoningBlock = memo(function ReasoningBlock({
+  reasoning,
+  imageWidth,
+}: {
+  reasoning: string;
+  imageWidth: number;
+}) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -97,7 +105,7 @@ const ReasoningBlock = memo(function ReasoningBlock({ reasoning }: { reasoning: 
       </button>
       {open && (
         <div className="reasoning-content">
-          <MarkdownView content={reasoning} />
+          <MarkdownView content={reasoning} imageWidth={imageWidth} />
         </div>
       )}
     </section>
@@ -106,6 +114,7 @@ const ReasoningBlock = memo(function ReasoningBlock({ reasoning }: { reasoning: 
 
 interface MessageItemProps {
   message: ChatMessage;
+  imageWidth: number;
   editing: boolean;
   editingContent: string;
   copied: boolean;
@@ -124,6 +133,7 @@ interface MessageItemProps {
 
 const MessageItem = memo(function MessageItem({
   message,
+  imageWidth,
   editing,
   editingContent,
   copied,
@@ -214,7 +224,7 @@ const MessageItem = memo(function MessageItem({
         )}
 
         {!editing && message.role === "assistant" && message.reasoning && (
-          <ReasoningBlock reasoning={message.reasoning} />
+          <ReasoningBlock reasoning={message.reasoning} imageWidth={imageWidth} />
         )}
 
         {editing ? (
@@ -248,10 +258,10 @@ const MessageItem = memo(function MessageItem({
           </div>
         ) : message.role === "assistant" ? (
           message.content
-            ? <MarkdownView content={message.content} />
+            ? <MarkdownView content={message.content} imageWidth={imageWidth} />
             : <PendingResponse startedAt={message.createdAt} />
         ) : (
-          message.content && <p className="user-text">{message.content}</p>
+          message.content && <MarkdownView content={message.content} imageWidth={imageWidth} />
         )}
 
         {(message.content || message.attachments?.length) && (
@@ -334,8 +344,33 @@ const MessageItem = memo(function MessageItem({
   );
 });
 
+const OpeningMessage = memo(function OpeningMessage({
+  content,
+  imageWidth,
+}: {
+  content: string;
+  imageWidth: number;
+}) {
+  if (!content.trim()) return null;
+  return (
+    <article className="message assistant opening-message">
+      <div className="message-gutter">
+        <div className="role-icon"><Bot size={15} /></div>
+      </div>
+      <div className="message-main">
+        <header className="message-meta">
+          <div className="message-author"><strong>시작 메시지</strong></div>
+        </header>
+        <MarkdownView content={content} imageWidth={imageWidth} />
+      </div>
+    </article>
+  );
+});
+
 export const MessageList = memo(function MessageList({
   messages,
+  openingMessage,
+  imageWidth,
   editingMessageId,
   editingContent,
   copiedId,
@@ -352,12 +387,14 @@ export const MessageList = memo(function MessageList({
 }: MessageListProps) {
   return (
     <div className="message-list">
+      <OpeningMessage content={openingMessage} imageWidth={imageWidth} />
       {messages.map((message, index) => {
         const editing = editingMessageId === message.id;
         return (
           <MessageItem
             key={message.id}
             message={message}
+            imageWidth={imageWidth}
             editing={editing}
             editingContent={editing ? editingContent : ""}
             copied={copiedId === message.id}

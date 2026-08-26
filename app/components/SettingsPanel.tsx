@@ -349,6 +349,32 @@ export function SettingsPanel({
                 />
               </label>
 
+              <label className="field-group">
+                <span className="field-label">시작 메시지</span>
+                <textarea
+                  value={conversationSettings.openingMessage}
+                  onChange={(event) => updateConversation("openingMessage", event.target.value)}
+                  placeholder="대화 시작 상황 · 마크다운 및 이미지 문법 지원"
+                  rows={6}
+                />
+                <small>현재 대화 상단에 표시되며 첫 assistant 문맥으로 전송</small>
+              </label>
+
+              <label className="field-group range-field">
+                <span className="field-label">
+                  마크다운 이미지 크기 <output>{settings.markdownImageWidth}%</output>
+                </span>
+                <input
+                  type="range"
+                  min="30"
+                  max="100"
+                  step="5"
+                  value={settings.markdownImageWidth}
+                  onChange={(event) => update("markdownImageWidth", Number(event.target.value))}
+                />
+                <small>모든 대화의 사용자·시작·AI 메시지에 공통 적용</small>
+              </label>
+
               <label className="field-group range-field">
                 <span className="field-label">
                   Temperature <output>{conversationSettings.temperature.toFixed(1)}</output>

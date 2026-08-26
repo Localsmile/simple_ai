@@ -55,7 +55,11 @@ function estimateRequestContextTokens(
 ): number {
   return messages.reduce(
     (total, message) => total + estimateMessageTokens(message, settings.vision),
-    estimateTextTokens(settings.systemPrompt) + REQUEST_OVERHEAD_TOKENS,
+    estimateTextTokens(settings.systemPrompt)
+      + (settings.openingMessage.trim()
+        ? MESSAGE_OVERHEAD_TOKENS + estimateTextTokens(settings.openingMessage)
+        : 0)
+      + REQUEST_OVERHEAD_TOKENS,
   );
 }
 
@@ -69,7 +73,11 @@ export function planRequestContext(
     ? allTurns.flat()
     : allTurns.slice(-Math.max(1, Math.floor(settings.historyTurns))).flat();
   const omittedByTurnLimit = requestMessages.length - turnLimitedMessages.length;
-  const systemTokens = estimateTextTokens(settings.systemPrompt) + REQUEST_OVERHEAD_TOKENS;
+  const systemTokens = estimateTextTokens(settings.systemPrompt)
+    + (settings.openingMessage.trim()
+      ? MESSAGE_OVERHEAD_TOKENS + estimateTextTokens(settings.openingMessage)
+      : 0)
+    + REQUEST_OVERHEAD_TOKENS;
   const unlimited = settings.contextLimit === -1;
   const inputBudget = unlimited
     ? -1

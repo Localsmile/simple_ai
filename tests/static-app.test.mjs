@@ -183,6 +183,50 @@ test("binds connection and generation settings to each conversation", async () =
   assert.match(settings, /conversationSettings\.systemPrompt/);
 });
 
+test("supports a per-conversation markdown opening message", async () => {
+  const [types, page, api, planner, settings, messageList] = await Promise.all([
+    readFile(new URL("app/types.ts", root), "utf8"),
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/lib/api.ts", root), "utf8"),
+    readFile(new URL("app/lib/context.ts", root), "utf8"),
+    readFile(new URL("app/components/SettingsPanel.tsx", root), "utf8"),
+    readFile(new URL("app/components/MessageList.tsx", root), "utf8"),
+  ]);
+  assert.match(types, /openingMessage:\s*string/);
+  assert.match(page, /openingMessage:\s*""/);
+  assert.match(page, /seedConversation\.settings\.openingMessage/);
+  assert.match(page, /nextSettings\.openingMessage\.trim\(\)/);
+  assert.match(api, /openingMessage = ""/);
+  assert.match(api, /role: "assistant", content: openingMessage\.trim\(\)/);
+  assert.match(planner, /estimateTextTokens\(settings\.openingMessage\)/);
+  assert.match(settings, />시작 메시지</);
+  assert.match(settings, /updateConversation\("openingMessage"/);
+  assert.match(messageList, /function OpeningMessage/);
+  assert.match(messageList, /<MarkdownView content=\{content\} imageWidth=\{imageWidth\}/);
+});
+
+test("uses one shared image scale and renders user messages as markdown", async () => {
+  const [types, page, storage, settings, markdown, messageList] = await Promise.all([
+    readFile(new URL("app/types.ts", root), "utf8"),
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/lib/storage.ts", root), "utf8"),
+    readFile(new URL("app/components/SettingsPanel.tsx", root), "utf8"),
+    readFile(new URL("app/components/MarkdownView.tsx", root), "utf8"),
+    readFile(new URL("app/components/MessageList.tsx", root), "utf8"),
+  ]);
+  assert.match(types, /markdownImageWidth:\s*number/);
+  assert.match(types, /markdownImageWidth:\s*100/);
+  assert.match(storage, /Math\.min\(100, Math\.max\(30, saved\.markdownImageWidth\)\)/);
+  assert.match(settings, /마크다운 이미지 크기/);
+  assert.match(settings, /update\("markdownImageWidth"/);
+  assert.match(page, /imageWidth=\{settings\.markdownImageWidth\}/);
+  assert.match(markdown, /imageWidth = 100/);
+  assert.match(markdown, /width=\{normalizedImageWidth\}/);
+  assert.doesNotMatch(markdown, /setWidth|이미지 크기<\/span>/);
+  assert.doesNotMatch(messageList, /<p className="user-text">/);
+  assert.match(messageList, /message\.content && <MarkdownView content=\{message\.content\} imageWidth=\{imageWidth\}/);
+});
+
 test("starts every new conversation with an empty system prompt", async () => {
   const page = await readFile(new URL("app/page.tsx", root), "utf8");
   assert.match(
@@ -306,6 +350,9 @@ test("preserves and displays provider-supplied reasoning", async () => {
   assert.match(api, /reasoningField \? \{ \[reasoningField\]: reasoning \}/);
   assert.match(page, /onReasoningDelta: \(delta\)/);
   assert.match(page, /reasoning: accumulatedReasoning \|\| undefined/);
+  assert.match(page, /const promoteReasoningToContent = !accumulated\.trim\(\)/);
+  assert.match(page, /promoteReasoningToContent\s*\? accumulatedReasoning/);
+  assert.match(page, /reasoning: promoteReasoningToContent \? undefined/);
   assert.match(messageList, /function ReasoningBlock/);
   assert.match(messageList, /aria-expanded=\{open\}/);
   assert.match(messageList, /<span>thinking<\/span>/);
