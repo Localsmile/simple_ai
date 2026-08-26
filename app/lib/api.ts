@@ -21,6 +21,7 @@ export interface CompletionResult {
   content: string;
   reasoning?: string;
   usage?: TokenUsage;
+  finishReason?: string;
   toolCalls: OpenAIToolCall[];
   rawAssistantMessage: Record<string, unknown>;
 }
@@ -45,6 +46,8 @@ interface RawUsage {
   cache_read_input_tokens?: number;
   prompt_tokens_details?: { cached_tokens?: number };
   input_tokens_details?: { cached_tokens?: number };
+  completion_tokens_details?: { reasoning_tokens?: number };
+  output_tokens_details?: { reasoning_tokens?: number };
 }
 
 interface RawContentPart {
@@ -69,6 +72,7 @@ interface ToolCallDelta {
 interface RawCompletionPayload {
   choices?: Array<{
     message?: RawMessage;
+    finish_reason?: string | null;
     delta?: {
       content?: string;
       reasoning?: string;
@@ -125,6 +129,10 @@ function normalizeUsage(usage?: RawUsage): TokenUsage | undefined {
     output,
     total: usage.total_tokens ?? input + output,
     cached,
+    reasoning:
+      usage.completion_tokens_details?.reasoning_tokens
+      ?? usage.output_tokens_details?.reasoning_tokens
+      ?? 0,
   };
 }
 
@@ -241,6 +249,33 @@ function serializeCompletionRequest(
   messages: ApiMessage[],
   tools?: ApiTool[],
 ): string {
+  let extraBody: Record<string, unknown> = {};
+  if (provider.extraBody.trim()) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(provider.extraBody);
+    } catch {
+      throw new Error("추가 요청 JSON 문법이 올바르지 않습니다.");
+    }
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+      throw new Error("추가 요청 JSON은 객체 형식이어야 합니다.");
+    }
+    extraBody = parsed as Record<string, unknown>;
+  }
+
+  const protectedFields = new Set([
+    "model",
+    "messages",
+    "stream",
+    "stream_options",
+    "tools",
+    "tool_choice",
+  ]);
+  const conflictingField = Object.keys(extraBody).find((key) => protectedFields.has(key));
+  if (conflictingField) {
+    throw new Error(`추가 요청 JSON에서 ${conflictingField} 필드는 변경할 수 없습니다.`);
+  }
+
   const body: Record<string, unknown> = {
     model: provider.model.trim(),
     messages,
@@ -248,6 +283,10 @@ function serializeCompletionRequest(
     max_tokens: settings.maxTokens,
     stream: settings.stream,
   };
+  for (const [key, value] of Object.entries(extraBody)) {
+    if (value === null) delete body[key];
+    else body[key] = value;
+  }
 
   if (settings.stream) body.stream_options = { include_usage: true };
   if (tools?.length) {
@@ -270,6 +309,7 @@ function parseJsonCompletion(payload: RawCompletionPayload): CompletionResult {
     content,
     reasoning: reasoning.content || undefined,
     usage: normalizeUsage(payload.usage),
+    finishReason: payload.choices?.[0]?.finish_reason || undefined,
     toolCalls: message.tool_calls || [],
     rawAssistantMessage: {
       role: "assistant",
@@ -330,6 +370,7 @@ export async function requestCompletion({
   let reasoning = "";
   let reasoningField: ReasoningField | undefined;
   let usage: TokenUsage | undefined;
+  let finishReason: string | undefined;
   const toolCalls: OpenAIToolCall[] = [];
 
   const processLine = (line: string) => {
@@ -353,7 +394,9 @@ export async function requestCompletion({
       throw new Error(`API 스트림 오류: ${message}`);
     }
 
-    const delta = payload.choices?.[0]?.delta || {};
+    const choice = payload.choices?.[0];
+    const delta = choice?.delta || {};
+    if (choice?.finish_reason) finishReason = choice.finish_reason;
     const reasoningDelta = readReasoning(delta);
     if (reasoningDelta.content) {
       reasoning += reasoningDelta.content;
@@ -383,6 +426,7 @@ export async function requestCompletion({
     content,
     reasoning: reasoning || undefined,
     usage,
+    finishReason,
     toolCalls,
     rawAssistantMessage: {
       role: "assistant",

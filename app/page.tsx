@@ -263,6 +263,7 @@ function addUsage(left: TokenUsage, right?: TokenUsage): TokenUsage {
     output: left.output + right.output,
     total: left.total + right.total,
     cached: left.cached + right.cached,
+    reasoning: (left.reasoning || 0) + (right.reasoning || 0),
   };
 }
 
@@ -292,6 +293,7 @@ function responseVariantFromMessage(message: ChatMessage): ResponseVariant {
     providerPresetName: message.providerPresetName,
     createdAt: message.createdAt,
     usage: cloneUsage(message.usage),
+    finishReason: message.finishReason,
     toolEvents: cloneToolEvents(message.toolEvents),
     contextTrim: cloneContextTrim(message.contextTrim),
     error: message.error,
@@ -319,6 +321,7 @@ function applyResponseVariant(message: ChatMessage, variant: ResponseVariant): C
     providerPresetName: variant.providerPresetName,
     createdAt: variant.createdAt,
     usage: cloneUsage(variant.usage),
+    finishReason: variant.finishReason,
     toolEvents: cloneToolEvents(variant.toolEvents),
     contextTrim: cloneContextTrim(variant.contextTrim),
     error: variant.error,
@@ -503,7 +506,7 @@ export default function Home() {
           }
           return addUsage(total, message.usage);
         },
-        { input: 0, output: 0, total: 0, cached: 0 },
+        { input: 0, output: 0, total: 0, cached: 0, reasoning: 0 },
       ),
     [conversation.messages],
   );
@@ -796,6 +799,7 @@ export default function Home() {
                   content,
                   reasoning: undefined,
                   usage: undefined,
+                  finishReason: undefined,
                   toolEvents: undefined,
                   error: false,
                 }
@@ -807,7 +811,13 @@ export default function Home() {
         content,
         responseVariants,
         ...(item.role === "assistant"
-          ? { reasoning: undefined, usage: undefined, toolEvents: undefined, error: false }
+          ? {
+              reasoning: undefined,
+              usage: undefined,
+              finishReason: undefined,
+              toolEvents: undefined,
+              error: false,
+            }
           : {}),
       };
     });
@@ -945,8 +955,9 @@ export default function Home() {
     );
     let accumulated = "";
     let accumulatedReasoning = "";
-    let usage: TokenUsage = { input: 0, output: 0, total: 0, cached: 0 };
+    let usage: TokenUsage = { input: 0, output: 0, total: 0, cached: 0, reasoning: 0 };
     let toolEvents: ToolEvent[] = [];
+    let finishReason: string | undefined;
 
     try {
       if (contextPlan.overLimit) {
@@ -992,6 +1003,7 @@ export default function Home() {
         roundReasoning = result.reasoning || roundReasoning;
         accumulatedReasoning = appendReasoning(reasoningRoundBase, roundReasoning);
         usage = addUsage(usage, result.usage);
+        finishReason = result.finishReason;
         updateAssistant(assistantMessage.id, (message) => ({
           ...message,
           content: accumulated,
@@ -1032,14 +1044,12 @@ export default function Home() {
         if (round === 4) throw new Error("MCP 도구 호출 한도에 도달했습니다.");
       }
 
-      const promoteReasoningToContent = !accumulated.trim() && Boolean(accumulatedReasoning.trim());
       const completedResponse: ChatMessage = {
         ...assistantMessage,
-        content: promoteReasoningToContent
-          ? accumulatedReasoning
-          : accumulated || "응답 본문이 비어 있습니다.",
-        reasoning: promoteReasoningToContent ? undefined : accumulatedReasoning || undefined,
+        content: accumulated,
+        reasoning: accumulatedReasoning || undefined,
         usage: usage.total > 0 ? usage : undefined,
+        finishReason: finishReason || "unknown",
         toolEvents,
         contextTrim,
       };
@@ -1180,6 +1190,31 @@ export default function Home() {
     await saveConversation(next);
   };
 
+  const useReasoningAsContent = async (messageId: string) => {
+    if (generating) return;
+    const target = conversation.messages.find((message) => message.id === messageId);
+    if (!target?.reasoning?.trim() || target.content.trim()) return;
+
+    const content = target.reasoning;
+    const responseVariants = target.responseVariants?.map((variant) =>
+      variant.id === target.activeResponseVariantId
+        ? { ...variant, content, reasoning: undefined }
+        : variant,
+    );
+    const messages = conversation.messages.map((message) =>
+      message.id === messageId
+        ? { ...message, content, reasoning: undefined, responseVariants }
+        : message,
+    );
+    const next: Conversation = {
+      ...conversation,
+      updatedAt: timestamp(),
+      messages,
+    };
+    commitConversation(next);
+    await saveConversation(next);
+  };
+
   const rerollMessage = async (messageId: string) => {
     if (generating) return;
     const messageIndex = conversation.messages.findIndex((message) => message.id === messageId);
@@ -1228,6 +1263,7 @@ export default function Home() {
   const stableSaveMessageEdit = useEventCallback(saveMessageEdit);
   const stableBranchConversation = useEventCallback(branchConversation);
   const stableSelectResponseVariant = useEventCallback(selectResponseVariant);
+  const stableUseReasoningAsContent = useEventCallback(useReasoningAsContent);
   const stableRerollMessage = useEventCallback(rerollMessage);
   const stableRemoveMessage = useEventCallback(removeMessage);
 
@@ -1373,6 +1409,9 @@ export default function Home() {
                 <span>TOTAL</span>
                 <span>IN <strong>{formatTokens(totalUsage.input)}</strong></span>
                 <span>OUT <strong>{formatTokens(totalUsage.output)}</strong></span>
+                {(totalUsage.reasoning || 0) > 0 && (
+                  <span>THINK <strong>{formatTokens(totalUsage.reasoning || 0)}</strong></span>
+                )}
                 {totalUsage.cached > 0 && <span>CACHE <strong>{formatTokens(totalUsage.cached)}</strong></span>}
               </div>
             )}
@@ -1426,6 +1465,7 @@ export default function Home() {
               onReroll={stableRerollMessage}
               onBranch={stableBranchConversation}
               onSelectVariant={stableSelectResponseVariant}
+              onUseReasoningAsContent={stableUseReasoningAsContent}
               onRemove={stableRemoveMessage}
             />
           )}

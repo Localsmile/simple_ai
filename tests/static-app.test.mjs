@@ -337,26 +337,41 @@ test("keeps utility chrome minimal and makes the GitHub token link obvious", asy
   assert.match(styles, /\.mcp-credential-link \{[\s\S]*?text-decoration: underline/);
 });
 
-test("preserves and displays provider-supplied reasoning", async () => {
-  const [types, api, page, messageList] = await Promise.all([
+test("diagnoses reasoning-only responses without silently replacing the final body", async () => {
+  const [types, api, page, messageList, settings, storage] = await Promise.all([
     readFile(new URL("app/types.ts", root), "utf8"),
     readFile(new URL("app/lib/api.ts", root), "utf8"),
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("app/components/MessageList.tsx", root), "utf8"),
+    readFile(new URL("app/components/SettingsPanel.tsx", root), "utf8"),
+    readFile(new URL("app/lib/storage.ts", root), "utf8"),
   ]);
   assert.match(types, /reasoning\?: string/);
+  assert.match(types, /finishReason\?: string/);
+  assert.match(types, /extraBody: string/);
   assert.match(api, /reasoning_content\?: string/);
   assert.match(api, /onReasoningDelta\?: \(delta: string\) => void/);
   assert.match(api, /reasoningField \? \{ \[reasoningField\]: reasoning \}/);
+  assert.match(api, /finish_reason\?: string \| null/);
+  assert.match(api, /completion_tokens_details\?: \{ reasoning_tokens\?: number \}/);
+  assert.match(api, /finishReason: payload\.choices\?\.\[0\]\?\.finish_reason/);
   assert.match(page, /onReasoningDelta: \(delta\)/);
   assert.match(page, /reasoning: accumulatedReasoning \|\| undefined/);
-  assert.match(page, /const promoteReasoningToContent = !accumulated\.trim\(\)/);
-  assert.match(page, /promoteReasoningToContent\s*\? accumulatedReasoning/);
-  assert.match(page, /reasoning: promoteReasoningToContent \? undefined/);
+  assert.match(page, /content: accumulated,/);
+  assert.match(page, /finishReason: finishReason \|\| "unknown"/);
+  assert.doesNotMatch(page, /promoteReasoningToContent/);
+  assert.match(page, /const useReasoningAsContent = async/);
   assert.match(messageList, /function ReasoningBlock/);
   assert.match(messageList, /aria-expanded=\{open\}/);
   assert.match(messageList, /<span>thinking<\/span>/);
   assert.match(messageList, /<MarkdownView content=\{reasoning\}/);
+  assert.match(messageList, /message\.finishReason === "length"/);
+  assert.match(messageList, /thinking을 본문으로 사용/);
+  assert.match(settings, /추가 요청 JSON/);
+  assert.match(settings, /updateProvider\("extraBody"/);
+  assert.match(storage, /extraBody: typeof preset\.extraBody === "string"/);
+  assert.match(api, /const protectedFields = new Set/);
+  assert.match(api, /if \(value === null\) delete body\[key\]/);
   const styles = await readFile(new URL("app/globals.css", root), "utf8");
   assert.match(styles, /\.reasoning-toggle \{[\s\S]*?appearance: none/);
   assert.match(styles, /\.reasoning-toggle \{[\s\S]*?background: transparent/);

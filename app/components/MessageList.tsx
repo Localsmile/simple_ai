@@ -7,6 +7,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
+  CircleAlert,
   FileCode2,
   GitBranch,
   Pencil,
@@ -38,6 +39,7 @@ interface MessageListProps {
   onSaveEdit: MessageAction;
   onBranch: MessageIdAction;
   onSelectVariant: MessageVariantAction;
+  onUseReasoningAsContent: MessageIdAction;
   onReroll: MessageIdAction;
   onRemove: MessageIdAction;
 }
@@ -86,9 +88,13 @@ const PendingResponse = memo(function PendingResponse({ startedAt }: { startedAt
 const ReasoningBlock = memo(function ReasoningBlock({
   reasoning,
   imageWidth,
+  canUseAsContent,
+  onUseAsContent,
 }: {
   reasoning: string;
   imageWidth: number;
+  canUseAsContent: boolean;
+  onUseAsContent: () => void;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -106,6 +112,11 @@ const ReasoningBlock = memo(function ReasoningBlock({
       {open && (
         <div className="reasoning-content">
           <MarkdownView content={reasoning} imageWidth={imageWidth} />
+          {canUseAsContent && (
+            <button className="reasoning-promote" type="button" onClick={onUseAsContent}>
+              thinking을 본문으로 사용
+            </button>
+          )}
         </div>
       )}
     </section>
@@ -127,6 +138,7 @@ interface MessageItemProps {
   onSaveEdit: MessageAction;
   onBranch: MessageIdAction;
   onSelectVariant: MessageVariantAction;
+  onUseReasoningAsContent: MessageIdAction;
   onReroll: MessageIdAction;
   onRemove: MessageIdAction;
 }
@@ -146,6 +158,7 @@ const MessageItem = memo(function MessageItem({
   onSaveEdit,
   onBranch,
   onSelectVariant,
+  onUseReasoningAsContent,
   onReroll,
   onRemove,
 }: MessageItemProps) {
@@ -224,7 +237,12 @@ const MessageItem = memo(function MessageItem({
         )}
 
         {!editing && message.role === "assistant" && message.reasoning && (
-          <ReasoningBlock reasoning={message.reasoning} imageWidth={imageWidth} />
+          <ReasoningBlock
+            reasoning={message.reasoning}
+            imageWidth={imageWidth}
+            canUseAsContent={!message.content.trim() && Boolean(message.finishReason)}
+            onUseAsContent={() => void onUseReasoningAsContent(message.id)}
+          />
         )}
 
         {editing ? (
@@ -257,14 +275,32 @@ const MessageItem = memo(function MessageItem({
             </div>
           </div>
         ) : message.role === "assistant" ? (
-          message.content
-            ? <MarkdownView content={message.content} imageWidth={imageWidth} />
-            : <PendingResponse startedAt={message.createdAt} />
+          message.content ? (
+            <MarkdownView content={message.content} imageWidth={imageWidth} />
+          ) : message.finishReason ? (
+            <div className="empty-response-notice" role="status">
+              <CircleAlert size={14} />
+              <span>
+                {message.finishReason === "length"
+                  ? "출력 한도에 도달해 최종 답변이 생성되지 않았습니다."
+                  : message.finishReason === "content_filter"
+                    ? "공급자의 콘텐츠 필터로 최종 답변이 비었습니다."
+                    : message.finishReason === "tool_calls"
+                      ? "공급자가 도구 호출만 반환했습니다."
+                      : message.reasoning
+                        ? "공급자가 최종 본문 없이 thinking만 반환했습니다."
+                        : "공급자가 빈 응답을 반환했습니다."}
+              </span>
+              {message.finishReason !== "unknown" && <code>{message.finishReason}</code>}
+            </div>
+          ) : (
+            <PendingResponse startedAt={message.createdAt} />
+          )
         ) : (
           message.content && <MarkdownView content={message.content} imageWidth={imageWidth} />
         )}
 
-        {(message.content || message.attachments?.length) && (
+        {(message.content || message.reasoning || message.finishReason || message.attachments?.length) && (
           <footer className="message-footer">
             <div className="message-actions">
               {message.content && (
@@ -334,6 +370,8 @@ const MessageItem = memo(function MessageItem({
             {message.usage && (
               <span className="message-usage">
                 {formatTokens(message.usage.input)} in · {formatTokens(message.usage.output)} out
+                {(message.usage.reasoning || 0) > 0
+                  && ` · ${formatTokens(message.usage.reasoning || 0)} thinking`}
                 {message.usage.cached > 0 && ` · ${formatTokens(message.usage.cached)} cached`}
               </span>
             )}
@@ -382,6 +420,7 @@ export const MessageList = memo(function MessageList({
   onSaveEdit,
   onBranch,
   onSelectVariant,
+  onUseReasoningAsContent,
   onReroll,
   onRemove,
 }: MessageListProps) {
@@ -407,6 +446,7 @@ export const MessageList = memo(function MessageList({
             onSaveEdit={onSaveEdit}
             onBranch={onBranch}
             onSelectVariant={onSelectVariant}
+            onUseReasoningAsContent={onUseReasoningAsContent}
             onReroll={onReroll}
             onRemove={onRemove}
           />

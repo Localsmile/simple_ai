@@ -94,6 +94,7 @@ function normalizePresets(saved: Partial<AppSettings> & LegacySettings): Provide
       apiKey: "",
       model: typeof preset.model === "string" ? preset.model : "",
       vision: Boolean(preset.vision),
+      extraBody: typeof preset.extraBody === "string" ? preset.extraBody : "",
     }));
   }
 
@@ -156,6 +157,7 @@ export function saveSettings(settings: AppSettings): void {
       baseUrl: preset.baseUrl,
       model: preset.model,
       vision: preset.vision,
+      extraBody: preset.extraBody,
     })),
   };
   const providerKeys = Object.fromEntries(

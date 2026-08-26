@@ -15,6 +15,7 @@ export interface TokenUsage {
   output: number;
   total: number;
   cached: number;
+  reasoning?: number;
 }
 
 export interface ToolEvent {
@@ -39,6 +40,7 @@ export interface ResponseVariant {
   providerPresetName?: string;
   createdAt: number;
   usage?: TokenUsage;
+  finishReason?: string;
   toolEvents?: ToolEvent[];
   contextTrim?: ContextTrimInfo;
   error?: boolean;
@@ -54,6 +56,7 @@ export interface ChatMessage {
   createdAt: number;
   attachments?: Attachment[];
   usage?: TokenUsage;
+  finishReason?: string;
   toolEvents?: ToolEvent[];
   contextTrim?: ContextTrimInfo;
   error?: boolean;
@@ -92,6 +95,7 @@ export interface ProviderPreset {
   apiKey: string;
   model: string;
   vision: boolean;
+  extraBody: string;
 }
 
 export type McpAuthType = "none" | "bearer" | "x-api-key";
@@ -137,6 +141,7 @@ export const DEFAULT_PROVIDER_PRESET: ProviderPreset = {
   apiKey: "",
   model: "",
   vision: false,
+  extraBody: "",
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {

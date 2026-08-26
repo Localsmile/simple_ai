@@ -172,6 +172,7 @@ export function SettingsPanel({
       apiKey: "",
       model: "",
       vision: false,
+      extraBody: "",
     };
     setShowApiKey(false);
     onChange({
@@ -321,6 +322,23 @@ export function SettingsPanel({
                   onChange={(event) => updateConversation("vision", event.target.checked)}
                 />
               </label>
+
+              <details className="advanced-request">
+                <summary>추가 요청 옵션</summary>
+                <label className="field-group">
+                  <span className="field-label">추가 요청 JSON</span>
+                  <textarea
+                    value={activeProvider.extraBody}
+                    onChange={(event) => updateProvider("extraBody", event.target.value)}
+                    spellCheck={false}
+                    placeholder={'{\n  "parameter": "value"\n}'}
+                    rows={6}
+                  />
+                  <small>
+                    현재 프리셋에만 저장 · 비표준 옵션 추가 · null 값은 기본 필드 제외
+                  </small>
+                </label>
+              </details>
 
               <label className="switch-row">
                 <span>
