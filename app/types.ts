@@ -5,6 +5,7 @@ export interface Attachment {
   name: string;
   type: string;
   size: number;
+  originalSize?: number;
   kind: AttachmentKind;
   dataUrl?: string;
   text?: string;

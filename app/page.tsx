@@ -41,6 +41,7 @@ import {
   requestCompletion,
 } from "./lib/api";
 import { planRequestContext } from "./lib/context";
+import { MAX_IMAGE_SOURCE_SIZE, optimizeImageToWebp } from "./lib/image";
 import { McpClient } from "./lib/mcp";
 import {
   deleteConversation,
@@ -405,6 +406,7 @@ export default function Home() {
   const [conversation, setConversation] = useState<Conversation>(() => newConversation(DEFAULT_SETTINGS));
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [optimizingImages, setOptimizingImages] = useState(false);
   const [composerError, setComposerError] = useState("");
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -676,6 +678,10 @@ export default function Home() {
 
   const addFiles = async (files: File[]) => {
     if (!files.length) return;
+    if (optimizingImages) {
+      setComposerError("현재 이미지 최적화가 끝난 뒤 파일을 추가하십시오.");
+      return;
+    }
     setComposerError("");
 
     if (attachments.length + files.length > MAX_FILES) {
@@ -683,40 +689,56 @@ export default function Home() {
       return;
     }
 
-    const totalSize = [...attachments.map((item) => item.size), ...files.map((file) => file.size)]
-      .reduce((sum, size) => sum + size, 0);
-    if (totalSize > MAX_TOTAL_SIZE) {
-      setComposerError("첨부 파일 전체 크기는 20MB를 초과할 수 없습니다.");
-      return;
-    }
+    setOptimizingImages(true);
+    try {
+      const next: Attachment[] = [];
+      let totalSize = attachments.reduce((sum, item) => sum + item.size, 0);
+      for (const file of files) {
+        const isImage = file.type.startsWith("image/");
+        const isText = file.type.startsWith("text/")
+          || TEXT_EXTENSIONS.has(fileExtension(file.name));
+        if (!isImage && !isText) {
+          setComposerError("지원 형식: 이미지, 텍스트, Markdown, CSV, JSON, 코드 파일");
+          continue;
+        }
+        if (isImage && file.size > MAX_IMAGE_SOURCE_SIZE) {
+          setComposerError(`${file.name}: 압축 전 이미지는 최대 40MB입니다.`);
+          continue;
+        }
+        if (isText && file.size > MAX_TEXT_SIZE) {
+          setComposerError(`${file.name}: 텍스트 파일 최대 크기는 2MB입니다.`);
+          continue;
+        }
 
-    const next: Attachment[] = [];
-    for (const file of files) {
-      const isImage = file.type.startsWith("image/");
-      const isText = file.type.startsWith("text/") || TEXT_EXTENSIONS.has(fileExtension(file.name));
-      if (!isImage && !isText) {
-        setComposerError("지원 형식: 이미지, 텍스트, Markdown, CSV, JSON, 코드 파일");
-        continue;
-      }
-      if (isImage && file.size > MAX_IMAGE_SIZE) {
-        setComposerError(`${file.name}: 이미지 최대 크기는 10MB입니다.`);
-        continue;
-      }
-      if (isText && file.size > MAX_TEXT_SIZE) {
-        setComposerError(`${file.name}: 텍스트 파일 최대 크기는 2MB입니다.`);
-        continue;
-      }
+        const preparedFile = isImage ? await optimizeImageToWebp(file) : file;
+        if (isImage && preparedFile.size > MAX_IMAGE_SIZE) {
+          setComposerError(`${file.name}: WebP 최적화 후에도 10MB를 초과합니다.`);
+          continue;
+        }
+        if (totalSize + preparedFile.size > MAX_TOTAL_SIZE) {
+          setComposerError("최적화된 첨부 파일 전체 크기는 20MB를 초과할 수 없습니다.");
+          continue;
+        }
+        totalSize += preparedFile.size;
 
-      next.push({
-        id: id("file"),
-        name: file.name,
-        type: file.type || "application/octet-stream",
-        size: file.size,
-        kind: isImage ? "image" : "text",
-        ...(isImage ? { dataUrl: await readAsDataUrl(file) } : { text: await file.text() }),
-      });
+        next.push({
+          id: id("file"),
+          name: preparedFile.name,
+          type: preparedFile.type || "application/octet-stream",
+          size: preparedFile.size,
+          originalSize: preparedFile.size < file.size ? file.size : undefined,
+          kind: isImage ? "image" : "text",
+          ...(isImage
+            ? { dataUrl: await readAsDataUrl(preparedFile) }
+            : { text: await preparedFile.text() }),
+        });
+      }
+      setAttachments((current) => [...current, ...next]);
+    } catch {
+      setComposerError("이미지 또는 파일을 처리하지 못했습니다.");
+    } finally {
+      setOptimizingImages(false);
     }
-    setAttachments((current) => [...current, ...next]);
   };
 
   const handleFiles = (event: ChangeEvent<HTMLInputElement>) => {
@@ -863,6 +885,10 @@ export default function Home() {
   };
 
   const validateSend = (): boolean => {
+    if (optimizingImages) {
+      setComposerError("이미지 최적화가 끝난 뒤 전송할 수 있습니다.");
+      return false;
+    }
     if (!input.trim() && !attachments.length) return false;
     if (!activeProvider.baseUrl.trim()) {
       setComposerError("API 엔드포인트가 필요합니다.");
@@ -1502,13 +1528,25 @@ export default function Home() {
                   )}
                   <span>
                     <strong>{attachment.name}</strong>
-                    <small>{attachment.kind === "image" ? "IMAGE" : "TEXT"}</small>
+                    <small>
+                      {attachment.kind === "image" ? attachment.type.replace("image/", "").toUpperCase() : "TEXT"}
+                      {` · ${formatBytes(attachment.size)}`}
+                      {attachment.originalSize
+                        ? ` · 원본 ${formatBytes(attachment.originalSize)}`
+                        : ""}
+                    </small>
                   </span>
                   <button type="button" onClick={() => setAttachments((current) => current.filter((item) => item.id !== attachment.id))} aria-label={`${attachment.name} 제거`}>
                     <X size={14} />
                   </button>
                 </div>
               ))}
+            </div>
+          )}
+
+          {optimizingImages && (
+            <div className="attachment-processing" role="status">
+              이미지 WebP 최적화 중…
             </div>
           )}
 
@@ -1535,6 +1573,7 @@ export default function Home() {
                   type="file"
                   multiple
                   hidden
+                  disabled={optimizingImages}
                   accept="image/*,.txt,.md,.markdown,.csv,.tsv,.json,.jsonl,.xml,.yaml,.yml,.html,.css,.js,.jsx,.ts,.tsx,.py,.java,.kt,.go,.rs,.c,.h,.cpp,.cs,.php,.rb,.swift,.sql,.sh,.ps1,.bat,.ini,.toml,.log"
                   onChange={handleFiles}
                 />
@@ -1564,7 +1603,13 @@ export default function Home() {
                     <Square size={13} fill="currentColor" />
                   </button>
                 ) : (
-                  <button className="send-button" type="button" onClick={() => void send()} disabled={!input.trim() && !attachments.length} aria-label="전송">
+                  <button
+                    className="send-button"
+                    type="button"
+                    onClick={() => void send()}
+                    disabled={optimizingImages || (!input.trim() && !attachments.length)}
+                    aria-label="전송"
+                  >
                     <ArrowUp size={17} />
                   </button>
                 )}

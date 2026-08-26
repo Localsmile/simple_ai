@@ -1141,6 +1141,13 @@ a:focus-visible {
 
 .attachment-card button:hover { color: var(--danger); background: var(--panel-3); }
 
+.attachment-processing {
+  margin: 0 3px 7px;
+  color: var(--text-dim);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+}
+
 .composer-error {
   margin: 0 3px 7px;
   color: var(--danger);

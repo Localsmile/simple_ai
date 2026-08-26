@@ -164,6 +164,26 @@ test("uploads pasted clipboard images through the shared attachment flow", async
   assert.match(page, /onPaste=\{handleComposerPaste\}/);
 });
 
+test("optimizes raster attachments as smaller WebP files before enforcing limits", async () => {
+  const [types, page, image] = await Promise.all([
+    readFile(new URL("app/types.ts", root), "utf8"),
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/lib/image.ts", root), "utf8"),
+  ]);
+  assert.match(types, /originalSize\?: number/);
+  assert.match(image, /const WEBP_QUALITY = 0\.82/);
+  assert.match(image, /const MAX_IMAGE_EDGE = 4096/);
+  assert.match(image, /PASSTHROUGH_TYPES.*image\/gif.*image\/svg\+xml.*image\/webp/);
+  assert.match(image, /canvas\.toBlob\(resolve, "image\/webp"/);
+  assert.match(image, /blob\.type !== "image\/webp"/);
+  assert.match(image, /blob\.size >= file\.size/);
+  assert.match(page, /await optimizeImageToWebp\(file\)/);
+  assert.match(page, /WebP 최적화 후에도 10MB를 초과/);
+  assert.match(page, /최적화된 첨부 파일 전체 크기/);
+  assert.match(page, /이미지 WebP 최적화 중/);
+  assert.match(page, /원본 \$\{formatBytes\(attachment\.originalSize\)\}/);
+});
+
 test("binds connection and generation settings to each conversation", async () => {
   const [types, page, settings] = await Promise.all([
     readFile(new URL("app/types.ts", root), "utf8"),
