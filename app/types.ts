@@ -77,6 +77,7 @@ export interface ConversationSettings {
   historyTurns: number;
   autoTrimContext: boolean;
   stream: boolean;
+  reasoning: ReasoningSettings;
 }
 
 export interface Conversation {
@@ -97,9 +98,36 @@ export interface ProviderPreset {
   model: string;
   vision: boolean;
   extraBody: string;
+  reasoning: ReasoningSettings;
 }
 
+export type ReasoningLevel = "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "budget";
+export interface ReasoningSettings {
+  format: "effort" | "reasoning" | "thinking" | "custom";
+  level: ReasoningLevel;
+  budget: number;
+  customMapping: string;
+}
+
+export type SendKey = "auto" | "enter" | "ctrl-enter";
+
 export type McpAuthType = "none" | "bearer" | "x-api-key";
+
+export interface McpServerConfig {
+  id: string;
+  name: string;
+  url: string;
+  authType: McpAuthType;
+  token: string;
+  enabled: boolean;
+  selectedTools: string[] | null;
+}
+
+export interface McpConnectionState {
+  status: "connecting" | "connected" | "error";
+  tools: McpToolDefinition[];
+  error?: string;
+}
 
 export interface AppSettings {
   providerPresets: ProviderPreset[];
@@ -114,10 +142,10 @@ export interface AppSettings {
   stream: boolean;
   markdownImageWidth: number;
   theme: "dark" | "light";
+  sendKey: SendKey;
   mcpEnabled: boolean;
-  mcpUrl: string;
-  mcpAuthType: McpAuthType;
-  mcpToken: string;
+  mcpServers: McpServerConfig[];
+  mcpToolLimit: number;
 }
 
 export interface McpToolDefinition {
@@ -135,6 +163,13 @@ export interface OpenAIToolCall {
   };
 }
 
+export const DEFAULT_REASONING: ReasoningSettings = {
+  format: "effort",
+  level: "default",
+  budget: 2048,
+  customMapping: "",
+};
+
 export const DEFAULT_PROVIDER_PRESET: ProviderPreset = {
   id: "default",
   name: "연결 1",
@@ -143,6 +178,7 @@ export const DEFAULT_PROVIDER_PRESET: ProviderPreset = {
   model: "",
   vision: false,
   extraBody: "",
+  reasoning: DEFAULT_REASONING,
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -158,10 +194,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   stream: true,
   markdownImageWidth: 100,
   theme: "dark",
+  sendKey: "auto",
   mcpEnabled: false,
-  mcpUrl: "https://mcp.exa.ai/mcp",
-  mcpAuthType: "none",
-  mcpToken: "",
+  mcpServers: [],
+  mcpToolLimit: 24,
 };
 
 export function getActiveProvider(settings: AppSettings): ProviderPreset {

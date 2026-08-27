@@ -1,5 +1,6 @@
-import type { AppSettings, Conversation, ProviderPreset } from "../types";
+import type { AppSettings, Conversation, ProviderPreset, McpServerConfig, McpAuthType } from "../types";
 import { DEFAULT_PROVIDER_PRESET, DEFAULT_SETTINGS } from "../types";
+import { normalizeReasoning } from "./reasoning";
 
 const DB_NAME = "simple-ai";
 const DB_VERSION = 1;
@@ -8,6 +9,7 @@ const SETTINGS_KEY = "simple-ai:settings";
 const PRESET_KEYS_KEY = "simple-ai:provider-keys";
 const LEGACY_API_KEY = "simple-ai:api-key";
 const MCP_TOKEN_KEY = "simple-ai:mcp-token";
+const MCP_TOKENS_KEY = "simple-ai:mcp-tokens";
 const CREDENTIAL_DEFAULT_MIGRATION_KEY = "simple-ai:credential-default-v1";
 const MAX_CONVERSATIONS = 30;
 
@@ -15,6 +17,9 @@ interface LegacySettings {
   baseUrl?: string;
   model?: string;
   vision?: boolean;
+  mcpUrl?: string;
+  mcpAuthType?: McpAuthType;
+  mcpToken?: string;
 }
 
 function openDatabase(): Promise<IDBDatabase> {
@@ -95,6 +100,7 @@ function normalizePresets(saved: Partial<AppSettings> & LegacySettings): Provide
       model: typeof preset.model === "string" ? preset.model : "",
       vision: Boolean(preset.vision),
       extraBody: typeof preset.extraBody === "string" ? preset.extraBody : "",
+      reasoning: normalizeReasoning(preset.reasoning),
     }));
   }
 
@@ -104,6 +110,38 @@ function normalizePresets(saved: Partial<AppSettings> & LegacySettings): Provide
     model: typeof saved.model === "string" ? saved.model : "",
     vision: Boolean(saved.vision),
   }];
+}
+
+export function normalizeMcpServers(saved: Partial<AppSettings> & LegacySettings): McpServerConfig[] {
+  if (Array.isArray(saved.mcpServers)) {
+    const ids = new Set<string>();
+    return saved.mcpServers.map((server, index) => {
+      let id = typeof server.id === "string" && server.id ? server.id : `mcp-${index}`;
+      while (ids.has(id)) id += "_";
+      ids.add(id);
+      return {
+        id,
+        name: typeof server.name === "string" ? server.name : `MCP ${index + 1}`,
+        url: typeof server.url === "string" ? server.url : "",
+        authType: server.authType === "bearer" || server.authType === "x-api-key"
+          ? server.authType : "none",
+        token: "",
+        enabled: Boolean(server.enabled),
+        selectedTools: server.selectedTools === null ? null : Array.isArray(server.selectedTools)
+          ? [...new Set(server.selectedTools.filter((name) => typeof name === "string"))] : [],
+      };
+    });
+  }
+  return saved.mcpUrl ? [{
+    id: "mcp-legacy",
+    name: "MCP 1",
+    url: saved.mcpUrl,
+    authType: saved.mcpAuthType === "bearer" || saved.mcpAuthType === "x-api-key"
+      ? saved.mcpAuthType : "none",
+    token: "",
+    enabled: true,
+    selectedTools: null,
+  }] : [];
 }
 
 export function loadSettings(): AppSettings {
@@ -131,6 +169,11 @@ export function loadSettings(): AppSettings {
   const activeProviderId = presetsWithKeys.some((preset) => preset.id === requestedActiveId)
     ? requestedActiveId
     : presetsWithKeys[0].id;
+  const mcpTokens = readJson<Record<string, string>>(credentialStore, MCP_TOKENS_KEY, {});
+  const legacyMcpToken = Array.isArray(saved.mcpServers) ? "" : credentialStore.getItem(MCP_TOKEN_KEY) || "";
+  const mcpServers = normalizeMcpServers(saved).map((server) => ({
+    ...server, token: mcpTokens[server.id] || legacyMcpToken,
+  }));
 
   return {
     ...DEFAULT_SETTINGS,
@@ -138,19 +181,25 @@ export function loadSettings(): AppSettings {
     providerPresets: presetsWithKeys,
     activeProviderId,
     rememberCredentials,
+    sendKey: saved.sendKey === "enter" || saved.sendKey === "ctrl-enter" ? saved.sendKey : "auto",
+    mcpServers,
+    mcpToolLimit: Number.isSafeInteger(saved.mcpToolLimit) && saved.mcpToolLimit! > 0
+      ? Math.min(128, saved.mcpToolLimit!) : DEFAULT_SETTINGS.mcpToolLimit,
     markdownImageWidth: typeof saved.markdownImageWidth === "number"
       ? Math.min(100, Math.max(30, saved.markdownImageWidth))
       : DEFAULT_SETTINGS.markdownImageWidth,
-    mcpToken: credentialStore.getItem(MCP_TOKEN_KEY) || "",
   };
 }
 
 export function saveSettings(settings: AppSettings): void {
   if (typeof window === "undefined") return;
 
-  const { mcpToken, ...settingsWithoutMcpToken } = settings;
   const safeSettings = {
-    ...settingsWithoutMcpToken,
+    ...settings,
+    mcpServers: settings.mcpServers.map(({ token: _token, ...server }) => {
+      void _token;
+      return server;
+    }),
     providerPresets: settings.providerPresets.map((preset) => ({
       id: preset.id,
       name: preset.name,
@@ -158,8 +207,12 @@ export function saveSettings(settings: AppSettings): void {
       model: preset.model,
       vision: preset.vision,
       extraBody: preset.extraBody,
+      reasoning: preset.reasoning,
     })),
   };
+  for (const key of ["mcpUrl", "mcpAuthType", "mcpToken"] as const) {
+    delete (safeSettings as Partial<LegacySettings>)[key];
+  }
   const providerKeys = Object.fromEntries(
     settings.providerPresets
       .filter((preset) => preset.apiKey)
@@ -171,9 +224,13 @@ export function saveSettings(settings: AppSettings): void {
   const activeStore = settings.rememberCredentials ? localStorage : sessionStorage;
   const inactiveStore = settings.rememberCredentials ? sessionStorage : localStorage;
   activeStore.setItem(PRESET_KEYS_KEY, JSON.stringify(providerKeys));
-  activeStore.setItem(MCP_TOKEN_KEY, mcpToken);
+  activeStore.setItem(MCP_TOKENS_KEY, JSON.stringify(Object.fromEntries(
+    settings.mcpServers.filter((server) => server.token).map((server) => [server.id, server.token]),
+  )));
   inactiveStore.removeItem(PRESET_KEYS_KEY);
-  inactiveStore.removeItem(MCP_TOKEN_KEY);
+  inactiveStore.removeItem(MCP_TOKENS_KEY);
+  localStorage.removeItem(MCP_TOKEN_KEY);
+  sessionStorage.removeItem(MCP_TOKEN_KEY);
   localStorage.removeItem(LEGACY_API_KEY);
   sessionStorage.removeItem(LEGACY_API_KEY);
 }

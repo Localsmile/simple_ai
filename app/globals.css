@@ -1449,6 +1449,26 @@ a:focus-visible {
 .settings-tabs button.active { color: var(--text); background: var(--panel-3); }
 .settings-content { min-height: 0; overflow: auto; }
 .settings-section { display: flex; flex-direction: column; gap: 20px; padding: 22px; }
+.reasoning-settings { display: grid; gap: 14px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+.mcp-server-list { display: grid; gap: 6px; }
+.mcp-server-list > div { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.mcp-server-list > div.selected { border-color: var(--line-strong); background: var(--panel-3); }
+.mcp-server-list input, .mcp-tool-options input { accent-color: var(--accent); width: 16px; height: 16px; flex: 0 0 auto; }
+.mcp-server-list > div > button { display: grid; gap: 4px; min-width: 0; flex: 1; min-height: 38px; padding: 3px; border: 0; background: transparent; text-align: left; }
+.mcp-server-list strong { font-size: 11px; overflow-wrap: anywhere; }
+.mcp-server-list small, .mcp-tool-picker > small { color: var(--text-dim); font-size: 9px; }
+.mcp-server-actions { display: flex; gap: 8px; }
+.mcp-server-actions .connect-button { flex: 1; }
+.mcp-tool-picker { display: grid; gap: 10px; }
+.mcp-selection-actions { display: flex; gap: 6px; }
+.mcp-selection-actions button { min-height: 32px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; color: var(--text-soft); background: var(--panel-2); font-size: 10px; }
+.mcp-tool-options { max-height: 320px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.mcp-tool-options:empty { display: none; }
+.mcp-tool-options label { display: flex; align-items: flex-start; gap: 8px; padding: 10px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.mcp-tool-options label:last-child { border: 0; }
+.mcp-tool-options span { min-width: 0; display: grid; gap: 4px; }
+.mcp-tool-options strong { font-family: var(--font-geist-mono), monospace; font-size: 10px; overflow-wrap: anywhere; }
+.mcp-tool-options small { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--text-dim); font-size: 9px; line-height: 1.45; }
 .field-group { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
 .field-label { display: flex; align-items: center; justify-content: space-between; color: var(--text-soft); font-size: 11px; font-weight: 560; }
 .field-label em { color: var(--text-dim); font-size: 9px; font-style: normal; font-weight: 400; }

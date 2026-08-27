@@ -42,7 +42,9 @@ import {
 } from "./lib/api";
 import { planRequestContext } from "./lib/context";
 import { MAX_IMAGE_SOURCE_SIZE, optimizeImageToWebp } from "./lib/image";
-import { McpClient } from "./lib/mcp";
+import { McpPool, mcpConnectionKey } from "./lib/mcp";
+import { normalizeReasoning } from "./lib/reasoning";
+import { enterSendsMessage, shouldSendMessage } from "./lib/input";
 import {
   deleteConversation,
   listConversations,
@@ -57,7 +59,7 @@ import type {
   Conversation,
   ConversationSettings,
   ContextTrimInfo,
-  McpToolDefinition,
+  McpConnectionState,
   ResponseVariant,
   TokenUsage,
   ToolEvent,
@@ -97,6 +99,7 @@ function conversationSettingsFromApp(settings: AppSettings): ConversationSetting
     historyTurns: settings.historyTurns,
     autoTrimContext: settings.autoTrimContext,
     stream: settings.stream,
+    reasoning: { ...provider.reasoning },
   };
 }
 
@@ -162,6 +165,7 @@ function normalizeConversation(
         ? stored.autoTrimContext
         : appSettings.autoTrimContext,
       stream: typeof stored?.stream === "boolean" ? stored.stream : appSettings.stream,
+      reasoning: normalizeReasoning(stored?.reasoning),
     },
   } as Conversation & { requestBodyProfile?: unknown };
   const currentTitle = typeof conversation.title === "string" ? conversation.title.trim() : "";
@@ -194,6 +198,7 @@ function syncAppDefaults(
             ...preset,
             model: conversationSettings.model,
             vision: conversationSettings.vision,
+            reasoning: { ...conversationSettings.reasoning },
           }
         : preset,
     ),
@@ -417,9 +422,8 @@ export default function Home() {
   const [editingContent, setEditingContent] = useState("");
   const [renamingConversationId, setRenamingConversationId] = useState("");
   const [conversationTitleDraft, setConversationTitleDraft] = useState("");
-  const [mcpStatus, setMcpStatus] = useState<"off" | "connecting" | "connected" | "error">("off");
-  const [mcpError, setMcpError] = useState("");
-  const [mcpTools, setMcpTools] = useState<McpToolDefinition[]>([]);
+  const [mcpConnections, setMcpConnections] = useState<Record<string, McpConnectionState>>({});
+  const [touchInput, setTouchInput] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -427,7 +431,22 @@ export default function Home() {
   const followOutputRef = useRef(true);
   const abortRef = useRef<AbortController | null>(null);
   const dragDepthRef = useRef(0);
-  const mcpClientRef = useRef<McpClient | null>(null);
+  const mcpPoolRef = useRef(new McpPool());
+  const settingsLiveRef = useRef(settings);
+  useLayoutEffect(() => { settingsLiveRef.current = settings; }, [settings]);
+  useEffect(() => {
+    const media = window.matchMedia("(pointer: coarse)");
+    const update = () => setTouchInput(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  const enterSends = enterSendsMessage(settings.sendKey, touchInput);
+  const activeMcpStates = settings.mcpServers.filter((server) => server.enabled)
+    .map((server) => mcpConnections[server.id]?.status);
+  const mcpStatus = activeMcpStates.includes("connecting") ? "connecting"
+    : activeMcpStates.includes("error") ? "error"
+      : activeMcpStates.includes("connected") ? "connected" : "off";
 
   useEffect(() => {
     let active = true;
@@ -533,17 +552,15 @@ export default function Home() {
 
   const changeSettings = useCallback(
     (next: AppSettings) => {
-      const mcpChanged =
-        settings.mcpEnabled !== next.mcpEnabled ||
-        settings.mcpUrl !== next.mcpUrl ||
-        settings.mcpAuthType !== next.mcpAuthType ||
-        settings.mcpToken !== next.mcpToken;
-      if (mcpChanged) {
-        mcpClientRef.current = null;
-        setMcpTools([]);
-        setMcpError("");
-        setMcpStatus("off");
-      }
+      const invalidated = settings.mcpServers.filter((server) => {
+        const replacement = next.mcpServers.find((item) => item.id === server.id);
+        return !replacement || mcpConnectionKey(server) !== mcpConnectionKey(replacement);
+      }).map((server) => server.id);
+      for (const id of invalidated) mcpPoolRef.current.invalidate(id);
+      if (invalidated.length) setMcpConnections((current) => Object.fromEntries(
+        Object.entries(current).filter(([id]) => !invalidated.includes(id)),
+      ));
+      settingsLiveRef.current = next;
       if (settings.activeProviderId !== next.activeProviderId) {
         const provider = next.providerPresets.find(
           (preset) => preset.id === next.activeProviderId,
@@ -554,6 +571,7 @@ export default function Home() {
             providerPresetId: provider.id,
             model: provider.model,
             vision: provider.vision,
+            reasoning: { ...provider.reasoning },
           });
         }
       }
@@ -575,6 +593,7 @@ export default function Home() {
       providerPresetId: provider.id,
       model: provider.model,
       vision: provider.vision,
+      reasoning: { ...provider.reasoning },
     });
   }, [changeConversationSettings, conversation.settings, settings.providerPresets]);
 
@@ -656,25 +675,25 @@ export default function Home() {
     void saveConversation(next);
   };
 
-  const connectMcp = useCallback(async (): Promise<McpClient | null> => {
-    if (!settings.mcpEnabled || !settings.mcpUrl.trim()) return null;
-    setMcpStatus("connecting");
-    setMcpError("");
-    const client = new McpClient(settings);
+  const connectMcp = useCallback(async (serverId: string): Promise<void> => {
+    const server = settings.mcpServers.find((item) => item.id === serverId);
+    if (!server?.url.trim()) return;
+    const key = mcpConnectionKey(server);
+    const publish = (state: McpConnectionState) => {
+      const current = settingsLiveRef.current.mcpServers.find((item) => item.id === serverId);
+      if (current && mcpConnectionKey(current) === key) {
+        setMcpConnections((states) => ({ ...states, [serverId]: state }));
+      }
+    };
+    mcpPoolRef.current.invalidate(serverId);
+    publish({ status: "connecting", tools: [] });
     try {
-      const tools = await client.connect();
-      mcpClientRef.current = client;
-      setMcpTools(tools);
-      setMcpStatus("connected");
-      return client;
+      const result = await mcpPoolRef.current.connect(server);
+      publish({ status: "connected", tools: result.tools });
     } catch (error) {
-      mcpClientRef.current = null;
-      setMcpTools([]);
-      setMcpStatus("error");
-      setMcpError(readableError(error));
-      return null;
+      publish({ status: "error", tools: [], error: readableError(error) });
     }
-  }, [settings]);
+  }, [settings.mcpServers]);
 
   const addFiles = async (files: File[]) => {
     if (!files.length) return;
@@ -991,11 +1010,21 @@ export default function Home() {
           "최근 입력과 시스템 프롬프트가 현재 컨텍스트 한도를 초과합니다. 첨부 파일을 줄이거나 이 대화의 컨텍스트 한도를 높이십시오.",
         );
       }
-      let client = settings.mcpEnabled ? mcpClientRef.current : null;
-      if (settings.mcpEnabled && !client) client = await connectMcp();
-      if (settings.mcpEnabled && !client) {
-        throw new Error(mcpError || "MCP 서버 연결에 실패했습니다.");
-      }
+      const requestServers = settings.mcpServers.map((server) => ({
+        ...server, selectedTools: server.selectedTools ? [...server.selectedTools] : null,
+      }));
+      const client = settings.mcpEnabled
+        ? await mcpPoolRef.current.prepare(
+            requestServers, settings.mcpToolLimit, abortController.signal,
+            (serverId, state) => {
+              const requestServer = requestServers.find((item) => item.id === serverId)!;
+              const current = settingsLiveRef.current.mcpServers.find((item) => item.id === serverId);
+              if (current && mcpConnectionKey(current) === mcpConnectionKey(requestServer)) {
+                setMcpConnections((states) => ({ ...states, [serverId]: state }));
+              }
+            },
+          )
+        : null;
       const apiTools = client?.toApiTools();
 
       for (let round = 0; round < 5; round += 1) {
@@ -1005,6 +1034,7 @@ export default function Home() {
         const result = await requestCompletion({
           settings: responseSettings,
           provider: responseProvider,
+          reasoning: seedConversation.settings.reasoning,
           messages: apiMessages,
           tools: apiTools,
           signal: abortController.signal,
@@ -1276,8 +1306,8 @@ export default function Home() {
   };
 
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-      if (generating) return;
+    if (shouldSendMessage(event.nativeEvent, settings.sendKey, touchInput)) {
+      if (generating || optimizingImages) return;
       event.preventDefault();
       void send();
     }
@@ -1563,6 +1593,7 @@ export default function Home() {
               onPaste={handleComposerPaste}
               onKeyDown={handleComposerKeyDown}
               placeholder="메시지 입력"
+              enterKeyHint={enterSends ? "send" : "enter"}
               rows={1}
               aria-label="메시지"
             />
@@ -1597,7 +1628,9 @@ export default function Home() {
                 </span>
               </div>
               <div className="composer-submit">
-                <span>{generating ? "응답 완료 후 전송 가능" : "Enter 전송 · Shift+Enter 줄바꿈"}</span>
+                <span>{generating ? "응답 완료 후 전송 가능"
+                  : enterSends ? "Enter 전송 · Shift+Enter 줄바꿈"
+                    : touchInput ? "Enter 줄바꿈 · 버튼으로 전송" : "Enter 줄바꿈 · Ctrl/⌘+Enter 전송"}</span>
                 {generating ? (
                   <button className="send-button stop" type="button" onClick={() => abortRef.current?.abort()} aria-label="생성 중지">
                     <Square size={13} fill="currentColor" />
@@ -1625,13 +1658,11 @@ export default function Home() {
         conversationId={conversation.id}
         settings={settings}
         conversationSettings={conversation.settings}
-        mcpStatus={mcpStatus}
-        mcpError={mcpError}
-        mcpTools={mcpTools}
+        mcpConnections={mcpConnections}
         onChange={changeSettings}
         onConversationChange={changeConversationSettings}
         onClose={() => setSettingsOpen(false)}
-        onConnectMcp={() => void connectMcp()}
+        onConnectMcp={(id) => void connectMcp(id)}
       />
     </main>
   );

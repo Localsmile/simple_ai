@@ -3,10 +3,7 @@
 import {
   Eye,
   EyeOff,
-  ExternalLink,
   Plus,
-  PlugZap,
-  RotateCw,
   Trash2,
   X,
 } from "lucide-react";
@@ -14,56 +11,26 @@ import { useState } from "react";
 import type {
   AppSettings,
   ConversationSettings,
-  McpToolDefinition,
+  McpConnectionState,
   ProviderPreset,
 } from "../types";
-import { getActiveProvider } from "../types";
+import { DEFAULT_REASONING, getActiveProvider } from "../types";
+import { ReasoningControls } from "./ReasoningControls";
+import { McpSettings } from "./McpSettings";
 import { MarkdownView } from "./MarkdownView";
 
 type SettingsTab = "connection" | "generation" | "mcp";
-
-const MCP_PRESETS: Array<{
-  id: string;
-  eyebrow: string;
-  name: string;
-  detail: string;
-  url: string;
-  authType: AppSettings["mcpAuthType"];
-  credentialUrl?: string;
-  credentialLabel?: string;
-}> = [
-  {
-    id: "exa-search",
-    eyebrow: "WEB SEARCH",
-    name: "Exa hosted MCP",
-    detail: "웹 검색 · URL 본문",
-    url: "https://mcp.exa.ai/mcp",
-    authType: "none",
-  },
-  {
-    id: "github-readonly",
-    eyebrow: "GITHUB READ ONLY",
-    name: "GitHub MCP",
-    detail: "저장소 코드 · 파일 · README",
-    url: "https://api.githubcopilot.com/mcp/readonly",
-    authType: "bearer",
-    credentialUrl: "https://github.com/settings/personal-access-tokens/new",
-    credentialLabel: "GitHub 인증 토큰 발급",
-  },
-];
 
 interface SettingsPanelProps {
   open: boolean;
   conversationId: string;
   settings: AppSettings;
   conversationSettings: ConversationSettings;
-  mcpStatus: "off" | "connecting" | "connected" | "error";
-  mcpError: string;
-  mcpTools: McpToolDefinition[];
+  mcpConnections: Record<string, McpConnectionState>;
   onChange: (settings: AppSettings) => void;
   onConversationChange: (settings: ConversationSettings) => void;
   onClose: () => void;
-  onConnectMcp: () => void;
+  onConnectMcp: (id: string) => void;
 }
 
 interface IntegerSettingInputProps {
@@ -127,9 +94,7 @@ export function SettingsPanel({
   conversationId,
   settings,
   conversationSettings,
-  mcpStatus,
-  mcpError,
-  mcpTools,
+  mcpConnections,
   onChange,
   onConversationChange,
   onClose,
@@ -137,7 +102,6 @@ export function SettingsPanel({
 }: SettingsPanelProps) {
   const [tab, setTab] = useState<SettingsTab>("connection");
   const [showApiKey, setShowApiKey] = useState(false);
-  const [showMcpToken, setShowMcpToken] = useState(false);
   const activeProvider = settings.providerPresets.find(
     (preset) => preset.id === conversationSettings.providerPresetId,
   ) || getActiveProvider(settings);
@@ -174,6 +138,7 @@ export function SettingsPanel({
       model: "",
       vision: false,
       extraBody: "",
+      reasoning: { ...DEFAULT_REASONING },
     };
     setShowApiKey(false);
     onChange({
@@ -357,6 +322,17 @@ export function SettingsPanel({
 
           {tab === "generation" && (
             <section className="settings-section">
+              <ReasoningControls value={conversationSettings.reasoning}
+                onChange={(value) => updateConversation("reasoning", value)} />
+              <label className="field-group">
+                <span className="field-label">메시지 전송 키 <em>공용 설정</em></span>
+                <select value={settings.sendKey}
+                  onChange={(event) => update("sendKey", event.target.value as AppSettings["sendKey"])}>
+                  <option value="auto">자동 · PC Enter / 터치 줄바꿈</option>
+                  <option value="enter">Enter 전송 · Shift+Enter 줄바꿈</option>
+                  <option value="ctrl-enter">Enter 줄바꿈 · Ctrl/⌘+Enter 전송</option>
+                </select>
+              </label>
               <label className="field-group">
                 <span className="field-label">시스템 프롬프트</span>
                 <textarea
@@ -486,124 +462,8 @@ export function SettingsPanel({
           )}
 
           {tab === "mcp" && (
-            <section className="settings-section">
-              <label className="switch-row emphasized">
-                <span>
-                  <strong>MCP 도구</strong>
-                  <small>Streamable HTTP · Beta</small>
-                </span>
-                <input
-                  type="checkbox"
-                  checked={settings.mcpEnabled}
-                  onChange={(event) => update("mcpEnabled", event.target.checked)}
-                />
-              </label>
-
-              <label className="field-group">
-                <span className="field-label">원격 MCP URL</span>
-                <input
-                  type="url"
-                  value={settings.mcpUrl}
-                  onChange={(event) => update("mcpUrl", event.target.value)}
-                  spellCheck={false}
-                  placeholder="https://server.example.com/mcp"
-                  disabled={!settings.mcpEnabled}
-                />
-                <small>HTTPS · POST · 브라우저 CORS 필요</small>
-              </label>
-
-              <label className="field-group">
-                <span className="field-label">인증 방식</span>
-                <select
-                  value={settings.mcpAuthType}
-                  onChange={(event) => update("mcpAuthType", event.target.value as AppSettings["mcpAuthType"])}
-                  disabled={!settings.mcpEnabled}
-                >
-                  <option value="none">없음</option>
-                  <option value="bearer">Bearer</option>
-                  <option value="x-api-key">x-api-key</option>
-                </select>
-              </label>
-
-              {settings.mcpAuthType !== "none" && (
-                <label className="field-group">
-                  <span className="field-label">MCP 인증 토큰</span>
-                  <span className="input-with-action">
-                    <input
-                      type={showMcpToken ? "text" : "password"}
-                      value={settings.mcpToken}
-                      onChange={(event) => update("mcpToken", event.target.value)}
-                      autoComplete="off"
-                      disabled={!settings.mcpEnabled}
-                    />
-                    <button type="button" onClick={() => setShowMcpToken((value) => !value)} aria-label="MCP 토큰 표시 전환">
-                      {showMcpToken ? <EyeOff size={16} /> : <Eye size={16} />}
-                    </button>
-                  </span>
-                </label>
-              )}
-
-              <button
-                type="button"
-                className="connect-button"
-                onClick={onConnectMcp}
-                disabled={!settings.mcpEnabled || !settings.mcpUrl || mcpStatus === "connecting"}
-              >
-                {mcpStatus === "connecting" ? <RotateCw className="spin" size={16} /> : <PlugZap size={16} />}
-                {mcpStatus === "connected" ? `${mcpTools.length}개 도구 연결됨` : "연결 확인"}
-              </button>
-
-              {mcpStatus === "error" && <p className="settings-error">{mcpError}</p>}
-
-              {mcpTools.length > 0 && (
-                <div className="tool-list">
-                  {mcpTools.map((tool) => (
-                    <div key={tool.name}>
-                      <strong>{tool.name}</strong>
-                      {tool.description && <span>{tool.description}</span>}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div className="mcp-preset-list">
-                {MCP_PRESETS.map((preset) => (
-                  <div className="mcp-preset" key={preset.id}>
-                    <span className="eyebrow">{preset.eyebrow}</span>
-                    <strong>{preset.name}</strong>
-                    <small>{preset.detail}</small>
-                    <code>{preset.url}</code>
-                    <div className="mcp-preset-actions">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          onChange({
-                            ...settings,
-                            mcpEnabled: true,
-                            mcpUrl: preset.url,
-                            mcpAuthType: preset.authType,
-                            mcpToken: "",
-                          })
-                        }
-                      >
-                        프리셋 적용
-                      </button>
-                      {preset.credentialUrl && (
-                        <a
-                          className="mcp-credential-link"
-                          href={preset.credentialUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {preset.credentialLabel}
-                          <ExternalLink size={11} aria-hidden="true" />
-                        </a>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
+            <McpSettings settings={settings} connections={mcpConnections}
+              onChange={onChange} onConnect={onConnectMcp} />
           )}
         </div>
       </aside>

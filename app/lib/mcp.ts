@@ -1,59 +1,58 @@
 import type {
-  AppSettings,
-  McpToolDefinition,
-  OpenAIToolCall,
+  McpServerConfig, McpToolDefinition, McpConnectionState, OpenAIToolCall,
 } from "../types";
 import type { ApiTool } from "./api";
 
 interface JsonRpcResponse {
-  jsonrpc: "2.0";
   id?: number | string;
   result?: {
     protocolVersion?: unknown;
     tools?: unknown;
+    nextCursor?: unknown;
     content?: unknown;
     isError?: unknown;
     [key: string]: unknown;
   };
-  error?: { code: number; message: string; data?: unknown };
+  error?: { message: string };
 }
 
-export interface McpCallResult {
-  text: string;
-  isError: boolean;
-}
+export interface McpCallResult { text: string; isError: boolean }
 
 function parseSse(text: string): JsonRpcResponse[] {
-  return text
-    .split(/\r?\n/)
-    .filter((line) => line.trim().startsWith("data:"))
-    .map((line) => line.trim().slice(5).trim())
-    .filter((line) => line && line !== "[DONE]")
-    .flatMap((line) => {
-      try {
-        return [JSON.parse(line) as JsonRpcResponse];
-      } catch {
-        return [];
-      }
-    });
+  return text.split(/\r?\n/).flatMap((line) => {
+    if (!line.trim().startsWith("data:")) return [];
+    try { return [JSON.parse(line.trim().slice(5).trim()) as JsonRpcResponse]; }
+    catch { return []; }
+  });
 }
 
-function safeToolName(name: string, index: number): string {
-  const normalized = name.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 52);
-  return `mcp_${index}_${normalized}`.slice(0, 64);
+export function mcpConnectionKey(server: McpServerConfig): string {
+  return JSON.stringify([server.url.trim(), server.authType, server.token]);
+}
+
+function abortError(): DOMException { return new DOMException("중지되었습니다.", "AbortError"); }
+
+function waitWithSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise((resolve, reject) => {
+    const abort = () => { cleanup(); reject(abortError()); };
+    const cleanup = () => signal.removeEventListener("abort", abort);
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then(
+      (value) => { cleanup(); resolve(value); },
+      (error) => { cleanup(); reject(error); },
+    );
+  });
 }
 
 export class McpClient {
-  private readonly settings: AppSettings;
   private requestId = 0;
   private sessionId = "";
   private protocolVersion = "2025-06-18";
   private tools: McpToolDefinition[] = [];
-  private safeToOriginal = new Map<string, string>();
 
-  constructor(settings: AppSettings) {
-    this.settings = settings;
-  }
+  constructor(private readonly server: McpServerConfig) {}
 
   private buildHeaders(): Headers {
     const headers = new Headers({
@@ -62,152 +61,223 @@ export class McpClient {
       "MCP-Protocol-Version": this.protocolVersion,
     });
     if (this.sessionId) headers.set("Mcp-Session-Id", this.sessionId);
-
-    const token = this.settings.mcpToken.trim();
-    if (token && this.settings.mcpAuthType === "bearer") {
-      headers.set("Authorization", `Bearer ${token}`);
-    } else if (token && this.settings.mcpAuthType === "x-api-key") {
-      headers.set("x-api-key", token);
-    }
+    const token = this.server.token.trim();
+    if (token && this.server.authType === "bearer") headers.set("Authorization", `Bearer ${token}`);
+    else if (token && this.server.authType === "x-api-key") headers.set("x-api-key", token);
     return headers;
   }
 
-  private async post(
-    payload: Record<string, unknown>,
-    signal?: AbortSignal,
-  ): Promise<JsonRpcResponse | null> {
-    let response: Response;
+  private async post(payload: Record<string, unknown>, signal?: AbortSignal): Promise<JsonRpcResponse | null> {
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    if (signal?.aborted) throw abortError();
+    signal?.addEventListener("abort", abort, { once: true });
+    const timer = setTimeout(abort, payload.method === "tools/call" ? 60_000 : 20_000);
     try {
-      response = await fetch(this.settings.mcpUrl.trim(), {
-        method: "POST",
-        headers: this.buildHeaders(),
-        body: JSON.stringify(payload),
-        signal,
+      const response = await fetch(this.server.url.trim(), {
+        method: "POST", headers: this.buildHeaders(), body: JSON.stringify(payload),
+        signal: controller.signal,
       });
+      if (!response.ok) {
+        throw new Error(`MCP ${response.status}: ${(await response.text()).slice(0, 1000) || response.statusText}`);
+      }
+      this.sessionId = response.headers.get("Mcp-Session-Id") || this.sessionId;
+      if (response.status === 202 || response.status === 204) return null;
+      const body = await response.text();
+      if (!body.trim()) return null;
+      const responses = response.headers.get("content-type")?.includes("text/event-stream")
+        ? parseSse(body) : [JSON.parse(body) as JsonRpcResponse];
+      const result = responses.find((item) => item.id === payload.id);
+      if (!result && payload.id !== undefined) throw new Error("MCP 응답 ID가 일치하지 않습니다.");
+      if (result?.error) throw new Error(`MCP 오류: ${result.error.message}`);
+      return result || null;
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") throw error;
-      throw new Error(
-        "MCP 연결 실패: 원격 HTTP 주소와 브라우저 CORS 허용 여부를 확인하십시오.",
-      );
+      if (signal?.aborted) throw abortError();
+      if (controller.signal.aborted) throw new Error("MCP 응답 시간이 초과되었습니다.");
+      if (error instanceof TypeError) throw new Error("MCP 연결 실패: 주소, 네트워크와 브라우저 CORS를 확인하십시오.");
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
     }
-
-    if (!response.ok) {
-      const detail = (await response.text()).slice(0, 1000);
-      throw new Error(`MCP ${response.status}: ${detail || response.statusText}`);
-    }
-
-    this.sessionId = response.headers.get("Mcp-Session-Id") || this.sessionId;
-    if (response.status === 202 || response.status === 204) return null;
-
-    const body = await response.text();
-    if (!body.trim()) return null;
-    const contentType = response.headers.get("content-type") || "";
-    const responses = contentType.includes("text/event-stream")
-      ? parseSse(body)
-      : [JSON.parse(body) as JsonRpcResponse];
-    const expectedId = payload.id;
-    const result =
-      responses.find((item) => item.id === expectedId) || responses.at(-1) || null;
-    if (result?.error) throw new Error(`MCP 오류: ${result.error.message}`);
-    return result;
   }
 
   async connect(signal?: AbortSignal): Promise<McpToolDefinition[]> {
-    const initializeId = ++this.requestId;
-    const initialized = await this.post(
-      {
-        jsonrpc: "2.0",
-        id: initializeId,
-        method: "initialize",
-        params: {
-          protocolVersion: this.protocolVersion,
-          capabilities: {},
-          clientInfo: { name: "simple-ai", version: "0.1.0" },
-        },
+    const initialized = await this.post({
+      jsonrpc: "2.0", id: ++this.requestId, method: "initialize",
+      params: {
+        protocolVersion: this.protocolVersion, capabilities: {},
+        clientInfo: { name: "simple-ai", version: "0.1.0" },
       },
-      signal,
-    );
-
-    const negotiated = initialized?.result?.protocolVersion;
+    }, signal);
+    if (!initialized?.result) throw new Error("MCP 초기화 응답이 없습니다.");
+    const negotiated = initialized.result.protocolVersion;
     if (typeof negotiated === "string") this.protocolVersion = negotiated;
-
-    await this.post(
-      { jsonrpc: "2.0", method: "notifications/initialized", params: {} },
-      signal,
-    );
-
-    const listId = ++this.requestId;
-    const response = await this.post(
-      { jsonrpc: "2.0", id: listId, method: "tools/list", params: {} },
-      signal,
-    );
-    this.tools = Array.isArray(response?.result?.tools)
-      ? (response?.result?.tools as McpToolDefinition[])
-      : [];
-
-    this.safeToOriginal.clear();
-    this.tools.forEach((tool, index) => {
-      this.safeToOriginal.set(safeToolName(tool.name, index), tool.name);
-    });
+    await this.post({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }, signal);
+    const tools = new Map<string, McpToolDefinition>();
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      const response = await this.post({
+        jsonrpc: "2.0", id: ++this.requestId, method: "tools/list",
+        params: cursor ? { cursor } : {},
+      }, signal);
+      if (!Array.isArray(response?.result?.tools)) throw new Error("MCP 도구 목록 응답이 올바르지 않습니다.");
+      for (const tool of response.result.tools as McpToolDefinition[]) {
+        if (tool && typeof tool.name === "string" && tool.name) tools.set(tool.name, tool);
+      }
+      const next = response.result.nextCursor;
+      cursor = typeof next === "string" && next ? next : undefined;
+      if (cursor && (cursors.has(cursor) || cursors.size >= 100 || tools.size > 10_000)) {
+        throw new Error("MCP 도구 목록 페이지 한도를 초과했습니다.");
+      }
+      if (cursor) cursors.add(cursor);
+    } while (cursor);
+    this.tools = [...tools.values()];
     return this.tools;
   }
 
-  toApiTools(): ApiTool[] {
-    return this.tools.map((tool, index) => {
-      const name = safeToolName(tool.name, index);
-      this.safeToOriginal.set(name, tool.name);
-      return {
-        type: "function",
-        function: {
-          name,
-          description: tool.description,
-          parameters: tool.inputSchema || { type: "object", properties: {} },
-        },
-      };
-    });
-  }
-
-  displayName(call: OpenAIToolCall): string {
-    return this.safeToOriginal.get(call.function.name) || call.function.name;
-  }
-
-  async callTool(
-    call: OpenAIToolCall,
-    signal?: AbortSignal,
-  ): Promise<McpCallResult> {
-    const originalName = this.displayName(call);
-    let args: Record<string, unknown> = {};
-    try {
-      args = call.function.arguments ? JSON.parse(call.function.arguments) : {};
-    } catch {
-      return { text: "도구 인자 JSON 파싱 실패", isError: true };
+  async callTool(call: OpenAIToolCall, signal?: AbortSignal): Promise<McpCallResult> {
+    const name = call.function.name;
+    if (!this.tools.some((tool) => tool.name === name)) {
+      return { text: "등록되지 않은 MCP 도구입니다.", isError: true };
     }
-
-    const id = ++this.requestId;
-    const response = await this.post(
-      {
-        jsonrpc: "2.0",
-        id,
-        method: "tools/call",
-        params: { name: originalName, arguments: args },
-      },
-      signal,
-    );
-
-    const result = response?.result || {};
+    let args: unknown;
+    try { args = call.function.arguments ? JSON.parse(call.function.arguments) : {}; }
+    catch { return { text: "도구 인자 JSON 파싱 실패", isError: true }; }
+    if (!args || Array.isArray(args) || typeof args !== "object") {
+      return { text: "도구 인자는 JSON 객체여야 합니다.", isError: true };
+    }
+    const response = await this.post({
+      jsonrpc: "2.0", id: ++this.requestId, method: "tools/call",
+      params: { name, arguments: args },
+    }, signal);
+    if (!response?.result) throw new Error("MCP 도구 실행 결과가 없습니다.");
+    const result = response.result;
     const content = Array.isArray(result.content) ? result.content : [];
-    const text = content
-      .map((item: Record<string, unknown>) => {
-        if (item.type === "text") return String(item.text || "");
-        if (item.type === "resource") return JSON.stringify(item.resource || item);
-        return JSON.stringify(item);
-      })
-      .filter(Boolean)
-      .join("\n\n");
+    const text = content.map((item: Record<string, unknown>) => {
+      if (item.type === "text") return String(item.text || "");
+      if (item.type === "resource") return JSON.stringify(item.resource || item);
+      return JSON.stringify(item);
+    }).filter(Boolean).join("\n\n");
+    return { text: text || JSON.stringify(result), isError: Boolean(result.isError) };
+  }
+}
 
-    return {
-      text: text || JSON.stringify(result),
-      isError: Boolean(result.isError),
-    };
+interface ConnectedServer {
+  server: McpServerConfig;
+  client: McpClient;
+  tools: McpToolDefinition[];
+}
+
+export class McpToolSession {
+  private readonly routes = new Map<string, { client: McpClient; name: string; label: string }>();
+  private readonly apiTools: ApiTool[] = [];
+
+  constructor(servers: ConnectedServer[], limit: number) {
+    servers.forEach(({ server, client, tools }, serverIndex) => {
+      const allowed = server.selectedTools === null ? null : new Set(server.selectedTools);
+      if (allowed && [...allowed].some((name) => !tools.some((tool) => tool.name === name))) {
+        throw new Error(`${server.name}: 선택한 도구가 목록에서 사라졌습니다. 도구 선택을 확인하십시오.`);
+      }
+      tools.filter((tool) => !allowed || allowed.has(tool.name)).forEach((tool, index) => {
+        const normalized = tool.name.replace(/[^a-zA-Z0-9_-]/g, "_");
+        const alias = `mcp_${serverIndex}_${index}_${normalized}`.slice(0, 64);
+        this.routes.set(alias, { client, name: tool.name, label: `${server.name} / ${tool.name}` });
+        this.apiTools.push({
+          type: "function",
+          function: {
+            name: alias,
+            description: `[${server.name}] ${tool.description || tool.name}`,
+            parameters: tool.inputSchema || { type: "object", properties: {} },
+          },
+        });
+      });
+    });
+    if (this.apiTools.length > limit) {
+      throw new Error(`선택한 MCP 도구 ${this.apiTools.length}개가 전송 한도 ${limit}개를 초과합니다. 도구 선택을 줄이거나 한도를 변경하십시오.`);
+    }
+  }
+
+  toApiTools(): ApiTool[] { return this.apiTools; }
+  displayName(call: OpenAIToolCall): string { return this.routes.get(call.function.name)?.label || call.function.name; }
+
+  async callTool(call: OpenAIToolCall, signal?: AbortSignal): Promise<McpCallResult> {
+    const route = this.routes.get(call.function.name);
+    if (!route) return { text: "현재 요청에서 허용되지 않은 MCP 도구입니다.", isError: true };
+    try {
+      return await route.client.callTool({
+        ...call, function: { ...call.function, name: route.name },
+      }, signal);
+    } catch (error) {
+      if (signal?.aborted) throw abortError();
+      return { text: error instanceof Error ? error.message : "MCP 도구 실행 실패", isError: true };
+    }
+  }
+}
+
+export class McpPool {
+  private entries = new Map<string, {
+    key: string; client: McpClient; controller: AbortController;
+    promise: Promise<McpToolDefinition[]>;
+  }>();
+
+  invalidate(id: string): void {
+    this.entries.get(id)?.controller.abort();
+    this.entries.delete(id);
+  }
+
+  async connect(server: McpServerConfig, signal?: AbortSignal): Promise<ConnectedServer> {
+    const key = mcpConnectionKey(server);
+    let entry = this.entries.get(server.id);
+    if (entry && entry.key !== key) { this.invalidate(server.id); entry = undefined; }
+    if (!entry) {
+      const client = new McpClient({ ...server });
+      const controller = new AbortController();
+      entry = { key, client, controller, promise: client.connect(controller.signal) };
+      this.entries.set(server.id, entry);
+      const captured = entry;
+      void entry.promise.catch(() => {
+        if (this.entries.get(server.id) === captured) this.entries.delete(server.id);
+      });
+    }
+    const tools = await waitWithSignal(entry.promise, signal);
+    return { server, client: entry.client, tools };
+  }
+
+  async prepare(
+    servers: McpServerConfig[], limit: number, signal?: AbortSignal,
+    report?: (id: string, state: McpConnectionState) => void,
+  ): Promise<McpToolSession> {
+    const active = servers.filter((server) => server.enabled
+      && (server.selectedTools === null || server.selectedTools.length > 0));
+    if (!active.length) throw new Error("활성 MCP 서버에서 전송할 도구를 선택하십시오.");
+    if (active.some((server) => !server.url.trim())) throw new Error("활성 MCP 서버의 URL이 필요합니다.");
+    const connected: ConnectedServer[] = new Array(active.length);
+    const failures: string[] = [];
+    let cursor = 0;
+    // Bounded parallel connection; tool execution remains in model-specified order.
+    await Promise.all(Array.from({ length: Math.min(3, active.length) }, async () => {
+      while (cursor < active.length) {
+        if (signal?.aborted) throw abortError();
+        const index = cursor++;
+        const server = active[index];
+        report?.(server.id, { status: "connecting", tools: [] });
+        try {
+          connected[index] = await this.connect(server, signal);
+          report?.(server.id, { status: "connected", tools: connected[index].tools });
+        } catch (error) {
+          if (signal?.aborted) {
+            report?.(server.id, { status: "error", tools: [], error: "MCP 연결 대기가 중지되었습니다." });
+            throw abortError();
+          }
+          const detail = error instanceof Error ? error.message : "연결 실패";
+          failures.push(`${server.name}: ${detail}`);
+          report?.(server.id, { status: "error", tools: [], error: detail });
+        }
+      }
+    }));
+    if (failures.length) throw new Error(failures.join("\n"));
+    return new McpToolSession(connected, limit);
   }
 }

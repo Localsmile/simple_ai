@@ -25,7 +25,8 @@ test("keeps credentials out of source defaults", async () => {
     readFile(new URL("app/lib/storage.ts", root), "utf8"),
   ]);
   assert.match(types, /apiKey:\s*""/);
-  assert.match(types, /mcpToken:\s*""/);
+  assert.match(types, /mcpServers:\s*\[\]/);
+  assert.match(storage, /token: ""/);
   assert.doesNotMatch(`${types}\n${storage}`, /sk-(?:proj-)?[a-zA-Z0-9_-]{16,}/);
 });
 
@@ -339,7 +340,7 @@ test("uses an explicit recent-turn limit without adaptive 413 retry loops", asyn
 });
 
 test("offers safe web search and GitHub read-only MCP presets", async () => {
-  const settings = await readFile(new URL("app/components/SettingsPanel.tsx", root), "utf8");
+  const settings = await readFile(new URL("app/components/McpSettings.tsx", root), "utf8");
   assert.match(settings, /const MCP_PRESETS/);
   assert.match(settings, /https:\/\/mcp\.exa\.ai\/mcp/);
   assert.match(settings, /https:\/\/api\.githubcopilot\.com\/mcp\/readonly/);
@@ -350,7 +351,9 @@ test("offers safe web search and GitHub read-only MCP presets", async () => {
   assert.match(settings, /className="mcp-credential-link"/);
   assert.match(settings, /target="_blank"[\s\S]*?rel="noreferrer"/);
   assert.match(settings, /MCP_PRESETS\.map\(\(preset\)/);
-  assert.match(settings, /mcpUrl: preset\.url,[\s\S]*?mcpAuthType: preset\.authType,[\s\S]*?mcpToken: ""/);
+  assert.match(settings, /url: preset\?\.url[\s\S]*?authType: preset\?\.authType[\s\S]*?token: ""/);
+  assert.match(settings, /selectedTools: \[\]/);
+  assert.match(settings, /mcpServers: \[\.\.\.settings\.mcpServers, next\]/);
 });
 
 test("keeps utility chrome minimal and makes the GitHub token link obvious", async () => {
@@ -378,7 +381,7 @@ test("diagnoses reasoning-only responses without silently replacing the final bo
   assert.match(types, /extraBody: string/);
   assert.match(api, /reasoning_content\?: string/);
   assert.match(api, /onReasoningDelta\?: \(delta: string\) => void/);
-  assert.match(api, /reasoningField \? \{ \[reasoningField\]: reasoning \}/);
+  assert.match(api, /reasoningField \? \{ \[reasoningField\]: wireReasoning \}/);
   assert.match(api, /finish_reason\?: string \| null/);
   assert.match(api, /completion_tokens_details\?: \{ reasoning_tokens\?: number \}/);
   assert.match(api, /finishReason: payload\.choices\?\.\[0\]\?\.finish_reason/);
@@ -397,8 +400,9 @@ test("diagnoses reasoning-only responses without silently replacing the final bo
   assert.match(settings, /추가 요청 JSON/);
   assert.match(settings, /updateProvider\("extraBody"/);
   assert.match(storage, /extraBody: typeof preset\.extraBody === "string"/);
-  assert.match(api, /const protectedFields = new Set/);
-  assert.match(api, /if \(value === null\) delete body\[key\]/);
+  const reasoning = await readFile(new URL("app/lib/reasoning.ts", root), "utf8");
+  assert.match(reasoning, /PROTECTED_REQUEST_FIELDS = new Set/);
+  assert.match(reasoning, /if \(value === null\) delete target\[key\]/);
   const styles = await readFile(new URL("app/globals.css", root), "utf8");
   assert.match(styles, /\.reasoning-toggle \{[\s\S]*?appearance: none/);
   assert.match(styles, /\.reasoning-toggle \{[\s\S]*?background: transparent/);

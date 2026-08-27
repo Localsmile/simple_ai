@@ -3,8 +3,10 @@ import type {
   ChatMessage,
   OpenAIToolCall,
   ProviderPreset,
+  ReasoningSettings,
   TokenUsage,
 } from "../types";
+import { mergeRequestOptions, reasoningOptions } from "./reasoning";
 
 export type ApiMessage = Record<string, unknown>;
 
@@ -29,6 +31,7 @@ export interface CompletionResult {
 export interface CompletionOptions {
   settings: AppSettings;
   provider: ProviderPreset;
+  reasoning?: ReasoningSettings;
   messages: ApiMessage[];
   tools?: ApiTool[];
   signal?: AbortSignal;
@@ -59,6 +62,7 @@ interface RawMessage {
   content?: string | RawContentPart[];
   reasoning?: string;
   reasoning_content?: string;
+  reasoning_details?: Record<string, unknown>[];
   tool_calls?: OpenAIToolCall[];
 }
 
@@ -77,6 +81,7 @@ interface RawCompletionPayload {
       content?: string;
       reasoning?: string;
       reasoning_content?: string;
+      reasoning_details?: Record<string, unknown>[];
       tool_calls?: ToolCallDelta[];
     };
   }>;
@@ -87,7 +92,7 @@ interface RawCompletionPayload {
 type ReasoningField = "reasoning" | "reasoning_content";
 
 function readReasoning(
-  value: Pick<RawMessage, ReasoningField>,
+  value: Pick<RawMessage, ReasoningField | "reasoning_details">,
 ): { content: string; field?: ReasoningField } {
   if (typeof value.reasoning === "string" && value.reasoning) {
     return { content: value.reasoning, field: "reasoning" };
@@ -95,7 +100,12 @@ function readReasoning(
   if (typeof value.reasoning_content === "string" && value.reasoning_content) {
     return { content: value.reasoning_content, field: "reasoning_content" };
   }
-  return { content: "" };
+  const details = Array.isArray(value.reasoning_details) ? value.reasoning_details : [];
+  return { content: details.map((detail) => {
+    if (detail?.type === "reasoning.text" && typeof detail.text === "string") return detail.text;
+    if (detail?.type === "reasoning.summary" && typeof detail.summary === "string") return detail.summary;
+    return "";
+  }).join("") };
 }
 
 export class ApiRequestError extends Error {
@@ -243,11 +253,12 @@ function apiError(status: number, body: string, requestBytes: number): ApiReques
   );
 }
 
-function serializeCompletionRequest(
+export function serializeCompletionRequest(
   settings: AppSettings,
   provider: ProviderPreset,
   messages: ApiMessage[],
   tools?: ApiTool[],
+  reasoning: ReasoningSettings = provider.reasoning,
 ): string {
   let extraBody: Record<string, unknown> = {};
   if (provider.extraBody.trim()) {
@@ -263,19 +274,6 @@ function serializeCompletionRequest(
     extraBody = parsed as Record<string, unknown>;
   }
 
-  const protectedFields = new Set([
-    "model",
-    "messages",
-    "stream",
-    "stream_options",
-    "tools",
-    "tool_choice",
-  ]);
-  const conflictingField = Object.keys(extraBody).find((key) => protectedFields.has(key));
-  if (conflictingField) {
-    throw new Error(`추가 요청 JSON에서 ${conflictingField} 필드는 변경할 수 없습니다.`);
-  }
-
   const body: Record<string, unknown> = {
     model: provider.model.trim(),
     messages,
@@ -283,10 +281,16 @@ function serializeCompletionRequest(
     max_tokens: settings.maxTokens,
     stream: settings.stream,
   };
-  for (const [key, value] of Object.entries(extraBody)) {
-    if (value === null) delete body[key];
-    else body[key] = value;
+  mergeRequestOptions(body, extraBody);
+  const overrides = reasoningOptions(reasoning);
+  if (reasoning.format === "reasoning" && reasoning.level !== "default"
+    && body.reasoning && typeof body.reasoning === "object") {
+    const existing = body.reasoning as Record<string, unknown>;
+    delete existing.effort;
+    delete existing.max_tokens;
+    delete existing.enabled;
   }
+  mergeRequestOptions(body, overrides);
 
   if (settings.stream) body.stream_options = { include_usage: true };
   if (tools?.length) {
@@ -315,6 +319,7 @@ function parseJsonCompletion(payload: RawCompletionPayload): CompletionResult {
       role: "assistant",
       content: message.content ?? content,
       ...(reasoning.field ? { [reasoning.field]: reasoning.content } : {}),
+      ...(Array.isArray(message.reasoning_details) ? { reasoning_details: message.reasoning_details } : {}),
       ...(message.tool_calls ? { tool_calls: message.tool_calls } : {}),
     },
   };
@@ -323,13 +328,14 @@ function parseJsonCompletion(payload: RawCompletionPayload): CompletionResult {
 export async function requestCompletion({
   settings,
   provider,
+  reasoning: reasoningSettings,
   messages,
   tools,
   signal,
   onDelta,
   onReasoningDelta,
 }: CompletionOptions): Promise<CompletionResult> {
-  const serializedBody = serializeCompletionRequest(settings, provider, messages, tools);
+  const serializedBody = serializeCompletionRequest(settings, provider, messages, tools, reasoningSettings);
 
   const headers = new Headers({ "Content-Type": "application/json" });
   if (provider.apiKey.trim()) {
@@ -368,10 +374,12 @@ export async function requestCompletion({
   let buffer = "";
   let content = "";
   let reasoning = "";
+  let wireReasoning = "";
   let reasoningField: ReasoningField | undefined;
   let usage: TokenUsage | undefined;
   let finishReason: string | undefined;
   const toolCalls: OpenAIToolCall[] = [];
+  const reasoningDetails: Record<string, unknown>[] = [];
 
   const processLine = (line: string) => {
     const trimmed = line.trim();
@@ -401,8 +409,11 @@ export async function requestCompletion({
     if (reasoningDelta.content) {
       reasoning += reasoningDelta.content;
       reasoningField ||= reasoningDelta.field;
+      if (reasoningDelta.field) wireReasoning += reasoningDelta.content;
       onReasoningDelta?.(reasoningDelta.content);
     }
+    // Keep the provider's signed/encrypted sequence intact for the next tool round.
+    if (Array.isArray(delta.reasoning_details)) reasoningDetails.push(...delta.reasoning_details);
     const text = typeof delta.content === "string" ? delta.content : "";
     if (text) {
       content += text;
@@ -431,7 +442,8 @@ export async function requestCompletion({
     rawAssistantMessage: {
       role: "assistant",
       content,
-      ...(reasoningField ? { [reasoningField]: reasoning } : {}),
+      ...(reasoningField ? { [reasoningField]: wireReasoning } : {}),
+      ...(reasoningDetails.length ? { reasoning_details: reasoningDetails } : {}),
       ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
     },
   };
