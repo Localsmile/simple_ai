@@ -266,10 +266,10 @@ export function serializeCompletionRequest(
     try {
       parsed = JSON.parse(provider.extraBody);
     } catch {
-      throw new Error("추가 요청 JSON 문법이 올바르지 않습니다.");
+      throw new Error("추가 요청 JSON 문법 오류");
     }
     if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
-      throw new Error("추가 요청 JSON은 객체 형식이어야 합니다.");
+      throw new Error("추가 요청 JSON 형식 오류 · 객체 필요");
     }
     extraBody = parsed as Record<string, unknown>;
   }
@@ -353,7 +353,7 @@ export async function requestCompletion({
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;
     throw new Error(
-      "API 연결 실패: 엔드포인트, 네트워크 상태, 브라우저 CORS 정책을 확인하십시오.",
+      "API 연결 실패 · 엔드포인트 / 네트워크 / CORS 오류",
     );
   }
 
@@ -367,7 +367,7 @@ export async function requestCompletion({
     return parseJsonCompletion((await response.json()) as RawCompletionPayload);
   }
 
-  if (!response.body) throw new Error("API 응답 스트림이 없습니다.");
+  if (!response.body) throw new Error("API 응답 스트림 없음");
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();

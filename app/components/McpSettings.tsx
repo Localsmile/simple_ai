@@ -1,16 +1,7 @@
 import { useState } from "react";
-import { Eye, EyeOff, ExternalLink, Plus, RotateCw, Trash2 } from "lucide-react";
+import { Check, CircleAlert, Eye, EyeOff, ExternalLink, Plus, RotateCw, Trash2 } from "lucide-react";
 import type { AppSettings, McpServerConfig, McpConnectionState } from "../types";
-
-const MCP_PRESETS = [
-  { name: "Exa hosted MCP", detail: "웹 검색 · URL 본문", url: "https://mcp.exa.ai/mcp", authType: "none" as const },
-  {
-    name: "GitHub MCP", detail: "저장소 코드 · 파일 · README",
-    url: "https://api.githubcopilot.com/mcp/readonly", authType: "bearer" as const,
-    credentialUrl: "https://github.com/settings/personal-access-tokens/new",
-    credentialLabel: "GitHub 인증 토큰 발급",
-  },
-];
+import { findPresetServer, MCP_PRESETS, mcpPresetState } from "../lib/mcp-config";
 
 export function McpSettings({ settings, connections, onChange, onConnect }: {
   settings: AppSettings;
@@ -21,6 +12,7 @@ export function McpSettings({ settings, connections, onChange, onConnect }: {
   const [selectedId, setSelectedId] = useState(settings.mcpServers[0]?.id || "");
   const [showToken, setShowToken] = useState(false);
   const [search, setSearch] = useState("");
+  const [visibleToolCount, setVisibleToolCount] = useState(100);
   const server = settings.mcpServers.find((item) => item.id === selectedId) || settings.mcpServers[0];
   const connection = server ? connections[server.id] : undefined;
   const tools = connection?.tools || [];
@@ -30,20 +22,24 @@ export function McpSettings({ settings, connections, onChange, onConnect }: {
   const selectedTools = server?.selectedTools === null ? tools.map((tool) => tool.name) : server?.selectedTools || [];
   const totalSelected = settings.mcpServers.filter((item) => item.enabled).reduce((count, item) =>
     count + (item.selectedTools?.length ?? connections[item.id]?.tools.length ?? 0), 0);
+  const hasUnlistedTools = settings.mcpServers.some((item) => item.enabled
+    && item.selectedTools === null && connections[item.id]?.status !== "connected");
 
   const updateServer = (patch: Partial<McpServerConfig>) => {
     if (!server) return;
     onChange({ ...settings, mcpServers: settings.mcpServers.map((item) =>
       item.id === server.id ? { ...item, ...patch } : item) });
   };
-  const selectServer = (id: string) => { setSelectedId(id); setSearch(""); setShowToken(false); };
+  const selectServer = (id: string) => {
+    setSelectedId(id); setSearch(""); setShowToken(false); setVisibleToolCount(100);
+  };
   const addServer = (preset?: typeof MCP_PRESETS[number]) => {
-    const existing = preset && settings.mcpServers.find((item) => item.url === preset.url);
+    const existing = preset && findPresetServer(settings.mcpServers, preset.url);
     if (existing) { selectServer(existing.id); return; }
     const next: McpServerConfig = {
       id: crypto.randomUUID(), name: preset?.name || `MCP ${settings.mcpServers.length + 1}`,
       url: preset?.url || "", authType: preset?.authType || "none", token: "",
-      enabled: true, selectedTools: [],
+      enabled: true, selectedTools: preset ? [...preset.selectedTools] : [],
     };
     onChange({ ...settings, mcpEnabled: true, mcpServers: [...settings.mcpServers, next] });
     selectServer(next.id);
@@ -51,7 +47,7 @@ export function McpSettings({ settings, connections, onChange, onConnect }: {
 
   return <section className="settings-section">
     <label className="switch-row emphasized">
-      <span><strong>MCP 도구</strong><small>선택한 서버와 도구만 전송 · Streamable HTTP</small></span>
+      <span><strong>MCP</strong></span>
       <input type="checkbox" checked={settings.mcpEnabled}
         onChange={(event) => onChange({ ...settings, mcpEnabled: event.target.checked })} />
     </label>
@@ -68,17 +64,10 @@ export function McpSettings({ settings, connections, onChange, onConnect }: {
       </div>)}
       <button className="connect-button" type="button" onClick={() => addServer()}><Plus size={14} /> 서버 추가</button>
     </div>
-    <label className="field-group">
-      <span className="field-label">요청당 도구 수 한도 <em>{totalSelected}개 선택</em></span>
-      <input type="number" min="1" max="128" key={settings.mcpToolLimit}
-        defaultValue={settings.mcpToolLimit} onBlur={(event) => {
-          const value = Number(event.target.value);
-          if (Number.isInteger(value) && value >= 1 && value <= 128) onChange({ ...settings, mcpToolLimit: value });
-          else event.target.value = String(settings.mcpToolLimit);
-        }} />
-      <small>한도 초과 시 전송 중단 · 자동 생략 없음</small>
-    </label>
-    {totalSelected > settings.mcpToolLimit && <p className="settings-error">선택한 도구가 전송 한도를 초과했습니다.</p>}
+    <div className="mcp-selection-summary">
+      <span>활성 서버 {settings.mcpServers.filter((item) => item.enabled).length}개</span>
+      <span>{hasUnlistedTools ? "전체 도구 · 미조회" : `선택 도구 ${totalSelected}개`}</span>
+    </div>
     {server && <>
       <label className="field-group"><span className="field-label">서버 이름</span>
         <input value={server.name} onChange={(event) => updateServer({ name: event.target.value })} />
@@ -86,7 +75,6 @@ export function McpSettings({ settings, connections, onChange, onConnect }: {
       <label className="field-group"><span className="field-label">원격 MCP URL</span>
         <input type="url" value={server.url} spellCheck={false}
           onChange={(event) => updateServer({ url: event.target.value, selectedTools: [] })} />
-        <small>HTTPS · POST · 브라우저 CORS 필요</small>
       </label>
       <label className="field-group"><span className="field-label">인증 방식</span>
         <select value={server.authType} onChange={(event) => updateServer({ authType: event.target.value as McpServerConfig["authType"] })}>
@@ -106,7 +94,7 @@ export function McpSettings({ settings, connections, onChange, onConnect }: {
         <button className="connect-button" type="button" onClick={() => onConnect(server.id)}
           disabled={!server.url.trim() || connection?.status === "connecting"}>
           <RotateCw size={14} className={connection?.status === "connecting" ? "spin" : ""} />
-          {connection?.status === "connecting" ? "연결 중" : "연결 · 도구 새로고침"}
+          {connection?.status === "connecting" ? "연결 중" : connection?.status === "connected" ? "도구 새로고침" : "연결"}
         </button>
         <button type="button" className="icon-button" aria-label="MCP 서버 삭제"
           onClick={() => {
@@ -119,33 +107,48 @@ export function McpSettings({ settings, connections, onChange, onConnect }: {
       {connection?.error && <p className="settings-error">{connection.error}</p>}
       {connection?.status === "connected" && <div className="mcp-tool-picker">
         <label className="field-group"><span className="field-label">전송할 도구 <em>{selectedTools.length} / {tools.length}</em></span>
-          <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="도구 검색" />
+          <input type="search" value={search} onChange={(event) => {
+            setSearch(event.target.value); setVisibleToolCount(100);
+          }} placeholder="도구 검색" />
         </label>
         <div className="mcp-selection-actions">
           <button type="button" onClick={() => updateServer({ selectedTools: [...new Set([...selectedTools, ...visibleTools.map((tool) => tool.name)])] })}>검색 결과 선택</button>
           <button type="button" onClick={() => updateServer({ selectedTools: [] })}>선택 해제</button>
         </div>
         <div className="mcp-tool-options">
-          {visibleTools.slice(0, 100).map((tool) => <label key={tool.name}>
+          {visibleTools.slice(0, visibleToolCount).map((tool) => <label key={tool.name}>
             <input type="checkbox" checked={selectedTools.includes(tool.name)}
               onChange={(event) => updateServer({ selectedTools: event.target.checked
                 ? [...selectedTools, tool.name] : selectedTools.filter((name) => name !== tool.name) })} />
             <span><strong>{tool.name}</strong>{tool.description && <small title={tool.description}>{tool.description}</small>}</span>
           </label>)}
         </div>
-        {visibleTools.length > 100 && <small>상위 100개 표시 · 검색으로 범위 축소</small>}
+        {visibleTools.length > visibleToolCount && <button className="connect-button" type="button"
+          onClick={() => setVisibleToolCount((count) => count + 100)}>
+          더 보기 · {visibleToolCount}/{visibleTools.length}
+        </button>}
       </div>}
     </>}
     <div className="mcp-preset-list">
-      {MCP_PRESETS.map((preset) => <div className="mcp-preset" key={preset.url}>
+      {MCP_PRESETS.map((preset) => {
+        const existing = findPresetServer(settings.mcpServers, preset.url);
+        const state = mcpPresetState(existing, existing ? connections[existing.id] : undefined);
+        return <div className={`mcp-preset ${existing ? "is-added" : ""}`} key={preset.url}>
         <strong>{preset.name}</strong><small>{preset.detail}</small><code>{preset.url}</code>
         <div className="mcp-preset-actions">
-          <button type="button" onClick={() => addServer(preset)}>연결 추가</button>
+          <button type="button" className={`mcp-preset-button ${state.status}`}
+            aria-label={`${preset.name} · ${state.label}`} onClick={() => addServer(preset)}>
+            {state.status === "connecting" ? <RotateCw size={13} className="spin" />
+              : state.status === "error" ? <CircleAlert size={13} />
+                : existing ? <Check size={13} /> : <Plus size={13} />}
+            <span aria-live="polite">{state.label}</span>
+          </button>
           {preset.credentialUrl && <a className="mcp-credential-link" href={preset.credentialUrl} target="_blank" rel="noreferrer">
             {preset.credentialLabel}<ExternalLink size={11} aria-hidden="true" />
           </a>}
         </div>
-      </div>)}
+      </div>;
+      })}
     </div>
   </section>;
 }

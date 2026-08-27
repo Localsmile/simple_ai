@@ -388,10 +388,10 @@ function readAsDataUrl(file: File): Promise<string> {
 
 function readableError(error: unknown): string {
   if (isPayloadTooLargeError(error)) {
-    return `API 요청 본문(${formatBytes(error.requestBytes)})이 공급자의 업로드 한도를 초과했습니다. 컨텍스트 토큰 한도와는 별개입니다. 시스템 프롬프트, 최신 메시지, 첨부 이미지·파일 또는 MCP 도구 결과의 크기를 줄이십시오.`;
+    return `API 413 · 요청 본문 ${formatBytes(error.requestBytes)} · 서버 전송 용량 한도 초과 (컨텍스트 토큰 한도와 별개)`;
   }
   if (error instanceof Error) return error.message;
-  return "알 수 없는 오류가 발생했습니다.";
+  return "알 수 없는 오류";
 }
 
 function useEventCallback<Args extends unknown[], Result>(
@@ -698,13 +698,13 @@ export default function Home() {
   const addFiles = async (files: File[]) => {
     if (!files.length) return;
     if (optimizingImages) {
-      setComposerError("현재 이미지 최적화가 끝난 뒤 파일을 추가하십시오.");
+      setComposerError("이미지 최적화 중 · 파일 추가 대기");
       return;
     }
     setComposerError("");
 
     if (attachments.length + files.length > MAX_FILES) {
-      setComposerError(`첨부 파일은 최대 ${MAX_FILES}개까지 가능합니다.`);
+      setComposerError(`첨부 파일 수 초과 · 최대 ${MAX_FILES}개`);
       return;
     }
 
@@ -721,21 +721,21 @@ export default function Home() {
           continue;
         }
         if (isImage && file.size > MAX_IMAGE_SOURCE_SIZE) {
-          setComposerError(`${file.name}: 압축 전 이미지는 최대 40MB입니다.`);
+          setComposerError(`${file.name}: 원본 이미지 40MB 초과`);
           continue;
         }
         if (isText && file.size > MAX_TEXT_SIZE) {
-          setComposerError(`${file.name}: 텍스트 파일 최대 크기는 2MB입니다.`);
+          setComposerError(`${file.name}: 텍스트 파일 2MB 초과`);
           continue;
         }
 
         const preparedFile = isImage ? await optimizeImageToWebp(file) : file;
         if (isImage && preparedFile.size > MAX_IMAGE_SIZE) {
-          setComposerError(`${file.name}: WebP 최적화 후에도 10MB를 초과합니다.`);
+          setComposerError(`${file.name}: WebP 최적화 후 10MB 초과`);
           continue;
         }
         if (totalSize + preparedFile.size > MAX_TOTAL_SIZE) {
-          setComposerError("최적화된 첨부 파일 전체 크기는 20MB를 초과할 수 없습니다.");
+          setComposerError("첨부 파일 합계 20MB 초과");
           continue;
         }
         totalSize += preparedFile.size;
@@ -754,7 +754,7 @@ export default function Home() {
       }
       setAttachments((current) => [...current, ...next]);
     } catch {
-      setComposerError("이미지 또는 파일을 처리하지 못했습니다.");
+      setComposerError("이미지·파일 처리 실패");
     } finally {
       setOptimizingImages(false);
     }
@@ -905,22 +905,22 @@ export default function Home() {
 
   const validateSend = (): boolean => {
     if (optimizingImages) {
-      setComposerError("이미지 최적화가 끝난 뒤 전송할 수 있습니다.");
+      setComposerError("이미지 최적화 중 · 전송 대기");
       return false;
     }
     if (!input.trim() && !attachments.length) return false;
     if (!activeProvider.baseUrl.trim()) {
-      setComposerError("API 엔드포인트가 필요합니다.");
+      setComposerError("API 엔드포인트 미설정");
       setSettingsOpen(true);
       return false;
     }
     if (!activeProvider.model.trim()) {
-      setComposerError("모델 이름이 필요합니다.");
+      setComposerError("모델 미설정");
       setSettingsOpen(true);
       return false;
     }
     if (attachments.some((item) => item.kind === "image") && !activeProvider.vision) {
-      setComposerError("이미지 전송에는 Vision 설정이 필요합니다.");
+      setComposerError("이미지 입력 꺼짐");
       return false;
     }
     return true;
@@ -1007,7 +1007,7 @@ export default function Home() {
     try {
       if (contextPlan.overLimit) {
         throw new Error(
-          "최근 입력과 시스템 프롬프트가 현재 컨텍스트 한도를 초과합니다. 첨부 파일을 줄이거나 이 대화의 컨텍스트 한도를 높이십시오.",
+          "컨텍스트 한도 초과 · 최근 입력·시스템 프롬프트·첨부 파일",
         );
       }
       const requestServers = settings.mcpServers.map((server) => ({
@@ -1015,7 +1015,7 @@ export default function Home() {
       }));
       const client = settings.mcpEnabled
         ? await mcpPoolRef.current.prepare(
-            requestServers, settings.mcpToolLimit, abortController.signal,
+            requestServers, abortController.signal,
             (serverId, state) => {
               const requestServer = requestServers.find((item) => item.id === serverId)!;
               const current = settingsLiveRef.current.mcpServers.find((item) => item.id === serverId);
@@ -1097,7 +1097,7 @@ export default function Home() {
           updateAssistant(assistantMessage.id, (message) => ({ ...message, toolEvents }));
         }
 
-        if (round === 4) throw new Error("MCP 도구 호출 한도에 도달했습니다.");
+        if (round === 4) throw new Error("MCP 연속 실행 한도 도달 · 5라운드");
       }
 
       const completedResponse: ChatMessage = {
@@ -1131,7 +1131,7 @@ export default function Home() {
       const aborted = error instanceof DOMException && error.name === "AbortError";
       const failedResponse: ChatMessage = {
         ...assistantMessage,
-        content: accumulated || (aborted ? "생성이 중지되었습니다." : readableError(error)),
+        content: accumulated || (aborted ? "생성 중지" : readableError(error)),
         reasoning: accumulatedReasoning || undefined,
         usage: usage.total > 0 ? usage : undefined,
         toolEvents,
@@ -1491,7 +1491,7 @@ export default function Home() {
               <div className="session-facts">
                 <span>{activeProvider.name}</span>
                 <span>{activeProvider.model || "모델 미설정"}</span>
-                <span>{activeProvider.vision ? "Vision ON" : "Vision OFF"}</span>
+                <span>이미지 입력 {activeProvider.vision ? "켜짐" : "꺼짐"}</span>
               </div>
               <div className="prompt-presets">
                 {["코드 검토", "문서 요약", "이미지 분석"].map((label) => (
@@ -1608,7 +1608,7 @@ export default function Home() {
                   accept="image/*,.txt,.md,.markdown,.csv,.tsv,.json,.jsonl,.xml,.yaml,.yml,.html,.css,.js,.jsx,.ts,.tsx,.py,.java,.kt,.go,.rs,.c,.h,.cpp,.cs,.php,.rb,.swift,.sql,.sh,.ps1,.bat,.ini,.toml,.log"
                   onChange={handleFiles}
                 />
-                <button type="button" onClick={() => fileInputRef.current?.click()} aria-label="파일 첨부">
+                <button type="button" onClick={() => fileInputRef.current?.click()} aria-label="파일 첨부" title="파일 첨부">
                   <Paperclip size={17} />
                 </button>
                 <select
@@ -1623,12 +1623,15 @@ export default function Home() {
                     <option key={preset.id} value={preset.id}>{preset.name}</option>
                   ))}
                 </select>
-                <span className={`vision-badge ${activeProvider.vision ? "on" : ""}`}>
-                  <ImageIcon size={13} /> VISION {activeProvider.vision ? "ON" : "OFF"}
-                </span>
+                <button type="button" className={`vision-toggle ${activeProvider.vision ? "on" : ""}`}
+                  aria-label="이미지 입력" aria-pressed={activeProvider.vision} disabled={generating}
+                  onClick={() => changeConversationSettings({ ...conversation.settings, vision: !activeProvider.vision })}>
+                  <ImageIcon size={13} />
+                  <span>이미지 입력 <strong>{activeProvider.vision ? "켜짐" : "꺼짐"}</strong></span>
+                </button>
               </div>
               <div className="composer-submit">
-                <span>{generating ? "응답 완료 후 전송 가능"
+                <span>{generating ? "응답 생성 중"
                   : enterSends ? "Enter 전송 · Shift+Enter 줄바꿈"
                     : touchInput ? "Enter 줄바꿈 · 버튼으로 전송" : "Enter 줄바꿈 · Ctrl/⌘+Enter 전송"}</span>
                 {generating ? (
@@ -1649,7 +1652,6 @@ export default function Home() {
               </div>
             </div>
           </div>
-          <p className="local-note">키와 대화 데이터는 설정된 브라우저 저장소 범위에서만 처리됩니다.</p>
         </div>
       </section>
 

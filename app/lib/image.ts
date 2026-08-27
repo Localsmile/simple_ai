@@ -18,7 +18,7 @@ function loadImage(file: File): Promise<{ image: HTMLImageElement; objectUrl: st
     image.onload = () => resolve({ image, objectUrl });
     image.onerror = () => {
       URL.revokeObjectURL(objectUrl);
-      reject(new Error("이미지를 읽을 수 없습니다."));
+      reject(new Error("이미지 읽기 실패"));
     };
     image.src = objectUrl;
   });

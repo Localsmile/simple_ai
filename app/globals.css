@@ -1198,6 +1198,8 @@ a:focus-visible {
 
 .composer-tools,
 .composer-submit { gap: 8px; }
+.composer-tools { flex: 1; min-width: 0; flex-wrap: wrap; }
+.composer-submit { flex-shrink: 0; }
 
 .composer-tools > button {
   display: grid;
@@ -1231,19 +1233,21 @@ a:focus-visible {
 .composer-preset-select:hover:not(:disabled),
 .composer-preset-select:focus { border-color: var(--line-strong); color: var(--text); }
 
-.vision-badge {
+.composer-tools > .vision-toggle {
   display: inline-flex;
+  width: auto;
   align-items: center;
   gap: 5px;
-  padding: 4px 6px;
+  padding: 4px 8px;
   border: 1px solid var(--line);
-  border-radius: 5px;
+  border-radius: 7px;
   color: var(--text-dim);
-  font-family: var(--font-geist-mono), monospace;
-  font-size: 8px;
+  font-size: 10px;
+  white-space: nowrap;
 }
 
-.vision-badge.on { color: var(--success); }
+.composer-tools > .vision-toggle.on { color: var(--success); }
+.vision-toggle strong { font-weight: 600; }
 
 .composer-submit > span {
   color: var(--text-dim);
@@ -1264,13 +1268,6 @@ a:focus-visible {
 
 .send-button:hover:not(:disabled) { transform: translateY(-1px); }
 .send-button.stop { color: var(--text); background: var(--panel-3); }
-
-.local-note {
-  margin: 7px 0 0;
-  color: var(--text-dim);
-  font-size: 9px;
-  text-align: center;
-}
 
 /* Markdown */
 .markdown-body {
@@ -1458,6 +1455,7 @@ a:focus-visible {
 .mcp-server-list strong { font-size: 11px; overflow-wrap: anywhere; }
 .mcp-server-list small, .mcp-tool-picker > small { color: var(--text-dim); font-size: 9px; }
 .mcp-server-actions { display: flex; gap: 8px; }
+.mcp-selection-summary { display: flex; justify-content: space-between; gap: 8px; color: var(--text-soft); font-size: 11px; }
 .mcp-server-actions .connect-button { flex: 1; }
 .mcp-tool-picker { display: grid; gap: 10px; }
 .mcp-selection-actions { display: flex; gap: 6px; }
@@ -1570,6 +1568,11 @@ a:focus-visible {
 .mcp-preset code { overflow: hidden; color: var(--text-dim); font-family: var(--font-geist-mono), monospace; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .mcp-preset-actions { display: flex; align-items: center; gap: 7px; margin-top: 3px; }
 .mcp-preset-actions button { width: fit-content; padding: 5px 8px; border: 1px solid var(--line); border-radius: 5px; color: var(--text-soft); background: var(--panel-3); font-size: 9px; }
+.mcp-preset.is-added { border-color: color-mix(in srgb, var(--success) 40%, var(--line)); }
+.mcp-preset-actions .mcp-preset-button { display: inline-flex; align-items: center; gap: 5px; min-height: 34px; font-size: 11px; }
+.mcp-preset-button.added, .mcp-preset-button.connected { color: var(--success); border-color: color-mix(in srgb, var(--success) 50%, var(--line)); background: color-mix(in srgb, var(--success) 8%, var(--panel-2)); }
+.mcp-preset-button.error { color: var(--danger); border-color: var(--danger); }
+.mcp-preset-button.connecting { color: var(--text); }
 .mcp-credential-link { display: inline-flex; align-items: center; gap: 4px; padding: 4px 2px; color: var(--blue); font-size: 10px; font-weight: 600; text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--blue) 65%, transparent); text-underline-offset: 3px; }
 .mcp-credential-link:hover { color: color-mix(in srgb, var(--blue) 80%, var(--text)); text-decoration-color: currentColor; }
 
@@ -1611,12 +1614,11 @@ a:focus-visible {
   .message-usage { width: 100%; margin-left: 0; }
   .message-editor-actions button { height: 36px; }
   .composer-submit > span { display: none; }
-  .local-note { display: none; }
   .composer-zone { padding-bottom: max(9px, env(safe-area-inset-bottom)); }
   .composer textarea { min-height: 56px; padding: 14px 14px 6px; font-size: 13px; }
   .composer-tools > button,
   .send-button { width: 40px; height: 40px; }
-  .vision-badge { display: none; }
+  .composer-tools > .vision-toggle { height: 40px; }
   .composer-preset-select { width: min(126px, 35vw); }
   .settings-panel { width: 100vw; }
   .settings-section { padding: 18px; }

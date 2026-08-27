@@ -114,7 +114,7 @@ const ReasoningBlock = memo(function ReasoningBlock({
           <MarkdownView content={reasoning} imageWidth={imageWidth} />
           {canUseAsContent && (
             <button className="reasoning-promote" type="button" onClick={onUseAsContent}>
-              thinking을 본문으로 사용
+              본문으로 사용
             </button>
           )}
         </div>
@@ -170,8 +170,8 @@ const MessageItem = memo(function MessageItem({
     && responseVariants.length > 1
     && activeVariantIndex >= 0;
   const variantSelectionTitle = hasFollowingMessages
-    ? "이 답변을 선택해 새 대화로 분기"
-    : "이 답변 선택";
+    ? "답변 선택 · 새 대화로 분기"
+    : "답변 선택";
   const responseIdentity = message.role === "assistant"
     ? [message.model, message.providerPresetName].filter(Boolean).join(" · ")
     : "";
@@ -282,14 +282,14 @@ const MessageItem = memo(function MessageItem({
               <CircleAlert size={14} />
               <span>
                 {message.finishReason === "length"
-                  ? "출력 한도에 도달해 최종 답변이 생성되지 않았습니다."
+                  ? "본문 없음 · 출력 토큰 한도 도달"
                   : message.finishReason === "content_filter"
-                    ? "공급자의 콘텐츠 필터로 최종 답변이 비었습니다."
+                    ? "본문 없음 · 콘텐츠 필터"
                     : message.finishReason === "tool_calls"
-                      ? "공급자가 도구 호출만 반환했습니다."
+                      ? "본문 없음 · 도구 호출 응답"
                       : message.reasoning
-                        ? "공급자가 최종 본문 없이 thinking만 반환했습니다."
-                        : "공급자가 빈 응답을 반환했습니다."}
+                        ? "본문 없음 · thinking 응답"
+                        : "빈 응답"}
               </span>
               {message.finishReason !== "unknown" && <code>{message.finishReason}</code>}
             </div>
@@ -316,7 +316,7 @@ const MessageItem = memo(function MessageItem({
                 type="button"
                 onClick={() => void onBranch(message.id)}
                 disabled={disabled}
-                title="이 메시지까지 복사해 새 대화로 분기"
+                title="새 대화로 분기"
               >
                 <GitBranch size={13} /> 분기
               </button>
@@ -324,7 +324,7 @@ const MessageItem = memo(function MessageItem({
                 type="button"
                 onClick={() => void onReroll(message.id)}
                 disabled={disabled}
-                title="기존 답변을 보존하고 다시 생성"
+                title="답변 후보 추가"
               >
                 <RotateCcw size={13} /> 다시 생성
               </button>

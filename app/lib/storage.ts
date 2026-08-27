@@ -14,6 +14,7 @@ const CREDENTIAL_DEFAULT_MIGRATION_KEY = "simple-ai:credential-default-v1";
 const MAX_CONVERSATIONS = 30;
 
 interface LegacySettings {
+  mcpToolLimit?: number;
   baseUrl?: string;
   model?: string;
   vision?: boolean;
@@ -141,13 +142,16 @@ export function normalizeMcpServers(saved: Partial<AppSettings> & LegacySettings
     token: "",
     enabled: true,
     selectedTools: null,
-  }] : [];
+  }] : DEFAULT_SETTINGS.mcpServers.map((server) => ({
+    ...server, selectedTools: server.selectedTools ? [...server.selectedTools] : null,
+  }));
 }
 
 export function loadSettings(): AppSettings {
   if (typeof window === "undefined") return DEFAULT_SETTINGS;
 
   const saved = readJson<Partial<AppSettings> & LegacySettings>(localStorage, SETTINGS_KEY, {});
+  delete saved.mcpToolLimit;
   const applyCredentialDefault = localStorage.getItem(CREDENTIAL_DEFAULT_MIGRATION_KEY) !== "1";
   const storedRememberCredentials = typeof saved.rememberCredentials === "boolean"
     ? saved.rememberCredentials
@@ -183,8 +187,7 @@ export function loadSettings(): AppSettings {
     rememberCredentials,
     sendKey: saved.sendKey === "enter" || saved.sendKey === "ctrl-enter" ? saved.sendKey : "auto",
     mcpServers,
-    mcpToolLimit: Number.isSafeInteger(saved.mcpToolLimit) && saved.mcpToolLimit! > 0
-      ? Math.min(128, saved.mcpToolLimit!) : DEFAULT_SETTINGS.mcpToolLimit,
+    mcpEnabled: typeof saved.mcpEnabled === "boolean" ? saved.mcpEnabled : DEFAULT_SETTINGS.mcpEnabled,
     markdownImageWidth: typeof saved.markdownImageWidth === "number"
       ? Math.min(100, Math.max(30, saved.markdownImageWidth))
       : DEFAULT_SETTINGS.markdownImageWidth,
@@ -210,7 +213,7 @@ export function saveSettings(settings: AppSettings): void {
       reasoning: preset.reasoning,
     })),
   };
-  for (const key of ["mcpUrl", "mcpAuthType", "mcpToken"] as const) {
+  for (const key of ["mcpUrl", "mcpAuthType", "mcpToken", "mcpToolLimit"] as const) {
     delete (safeSettings as Partial<LegacySettings>)[key];
   }
   const providerKeys = Object.fromEntries(

@@ -145,7 +145,6 @@ export interface AppSettings {
   sendKey: SendKey;
   mcpEnabled: boolean;
   mcpServers: McpServerConfig[];
-  mcpToolLimit: number;
 }
 
 export interface McpToolDefinition {
@@ -181,6 +180,16 @@ export const DEFAULT_PROVIDER_PRESET: ProviderPreset = {
   reasoning: DEFAULT_REASONING,
 };
 
+export const DEFAULT_WEB_SEARCH_MCP: McpServerConfig = {
+  id: "mcp-web-search",
+  name: "Exa 웹 검색",
+  url: "https://mcp.exa.ai/mcp",
+  authType: "none",
+  token: "",
+  enabled: true,
+  selectedTools: ["web_search_exa"],
+};
+
 export const DEFAULT_SETTINGS: AppSettings = {
   providerPresets: [DEFAULT_PROVIDER_PRESET],
   activeProviderId: DEFAULT_PROVIDER_PRESET.id,
@@ -195,9 +204,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   markdownImageWidth: 100,
   theme: "dark",
   sendKey: "auto",
-  mcpEnabled: false,
-  mcpServers: [],
-  mcpToolLimit: 24,
+  mcpEnabled: true,
+  mcpServers: [DEFAULT_WEB_SEARCH_MCP],
 };
 
 export function getActiveProvider(settings: AppSettings): ProviderPreset {

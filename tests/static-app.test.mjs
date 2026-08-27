@@ -25,7 +25,8 @@ test("keeps credentials out of source defaults", async () => {
     readFile(new URL("app/lib/storage.ts", root), "utf8"),
   ]);
   assert.match(types, /apiKey:\s*""/);
-  assert.match(types, /mcpServers:\s*\[\]/);
+  assert.match(types, /mcpServers:\s*\[DEFAULT_WEB_SEARCH_MCP\]/);
+  assert.match(types, /token:\s*""/);
   assert.match(storage, /token: ""/);
   assert.doesNotMatch(`${types}\n${storage}`, /sk-(?:proj-)?[a-zA-Z0-9_-]{16,}/);
 });
@@ -179,8 +180,8 @@ test("optimizes raster attachments as smaller WebP files before enforcing limits
   assert.match(image, /blob\.type !== "image\/webp"/);
   assert.match(image, /blob\.size >= file\.size/);
   assert.match(page, /await optimizeImageToWebp\(file\)/);
-  assert.match(page, /WebP 최적화 후에도 10MB를 초과/);
-  assert.match(page, /최적화된 첨부 파일 전체 크기/);
+  assert.match(page, /WebP 최적화 후 10MB 초과/);
+  assert.match(page, /첨부 파일 합계 20MB 초과/);
   assert.match(page, /이미지 WebP 최적화 중/);
   assert.match(page, /원본 \$\{formatBytes\(attachment\.originalSize\)\}/);
 });
@@ -283,7 +284,7 @@ test("keeps the composer writable while a response is streaming", async () => {
   assert.ok(textarea);
   assert.doesNotMatch(textarea, /disabled=\{generating\}/);
   assert.match(page, /if \(generating\) return;[\s\S]*?event\.preventDefault\(\);[\s\S]*?void send\(\)/);
-  assert.match(page, /generating \? "응답 완료 후 전송 가능"/);
+  assert.match(page, /generating \? "응답 생성 중"/);
   assert.doesNotMatch(page, /aria-label="파일 첨부" disabled=\{generating\}/);
   assert.doesNotMatch(page, /dropEffect = generating/);
 });
@@ -335,12 +336,16 @@ test("uses an explicit recent-turn limit without adaptive 413 retry loops", asyn
   ]);
   assert.match(planner, /const turnLimitedMessages = settings\.historyTurns === -1/);
   assert.match(planner, /reason: tokenTrimmed \? "tokens" : omittedByTurnLimit > 0 \? "turns"/);
-  assert.match(settings, /1턴 = 사용자 메시지와 응답 · -1은 전체 대화/);
+  assert.match(settings, /<small>-1: 전체<\/small>/);
   assert.doesNotMatch(page, /while \(true\)|retriedPayload|reducePayloadContext/);
 });
 
 test("offers safe web search and GitHub read-only MCP presets", async () => {
-  const settings = await readFile(new URL("app/components/McpSettings.tsx", root), "utf8");
+  const settings = (await Promise.all([
+    readFile(new URL("app/components/McpSettings.tsx", root), "utf8"),
+    readFile(new URL("app/lib/mcp-config.ts", root), "utf8"),
+    readFile(new URL("app/types.ts", root), "utf8"),
+  ])).join("\n");
   assert.match(settings, /const MCP_PRESETS/);
   assert.match(settings, /https:\/\/mcp\.exa\.ai\/mcp/);
   assert.match(settings, /https:\/\/api\.githubcopilot\.com\/mcp\/readonly/);
@@ -365,6 +370,26 @@ test("keeps utility chrome minimal and makes the GitHub token link obvious", asy
   assert.doesNotMatch(styles, /\.local-status/);
   assert.match(styles, /\.mcp-credential-link \{[\s\S]*?color: var\(--blue\)/);
   assert.match(styles, /\.mcp-credential-link \{[\s\S]*?text-decoration: underline/);
+});
+
+test("uses concise UI labels, a visible image toggle and distinct MCP registration feedback", async () => {
+  const [page, settings, reasoning, mcp, styles] = await Promise.all([
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/components/SettingsPanel.tsx", root), "utf8"),
+    readFile(new URL("app/components/ReasoningControls.tsx", root), "utf8"),
+    readFile(new URL("app/components/McpSettings.tsx", root), "utf8"),
+    readFile(new URL("app/globals.css", root), "utf8"),
+  ]);
+  assert.doesNotMatch([page, settings, reasoning, mcp].join("\n"), /하십시오|합니다|습니다|됩니다|local-note/);
+  assert.match(page, /aria-label="이미지 입력" aria-pressed=\{activeProvider\.vision\}/);
+  assert.match(page, /이미지 입력 <strong>/);
+  assert.match(page, /vision: !activeProvider\.vision/);
+  assert.doesNotMatch(styles, /vision-toggle[^}]*display: none/);
+  assert.doesNotMatch(mcp, /mcpToolLimit|요청당 도구 수 한도/);
+  assert.match(mcp, /mcpPresetState\(existing/);
+  assert.match(mcp, /aria-live="polite">\{state\.label\}/);
+  assert.match(mcp, /slice\(0, visibleToolCount\)/);
+  assert.match(styles, /\.mcp-preset-button\.added, \.mcp-preset-button\.connected/);
 });
 
 test("diagnoses reasoning-only responses without silently replacing the final body", async () => {
@@ -396,7 +421,7 @@ test("diagnoses reasoning-only responses without silently replacing the final bo
   assert.match(messageList, /<span>thinking<\/span>/);
   assert.match(messageList, /<MarkdownView content=\{reasoning\}/);
   assert.match(messageList, /message\.finishReason === "length"/);
-  assert.match(messageList, /thinking을 본문으로 사용/);
+  assert.match(messageList, /본문으로 사용/);
   assert.match(settings, /추가 요청 JSON/);
   assert.match(settings, /updateProvider\("extraBody"/);
   assert.match(storage, /extraBody: typeof preset\.extraBody === "string"/);

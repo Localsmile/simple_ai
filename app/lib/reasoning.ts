@@ -20,15 +20,15 @@ export function reasoningOptions(config: ReasoningSettings): Record<string, unkn
   const { level, format, budget } = config;
   if (level === "default") return {};
   if (level === "budget" && (!Number.isSafeInteger(budget) || budget <= 0)) {
-    throw new Error("추론 토큰 예산은 양의 정수여야 합니다.");
+    throw new Error("추론 토큰 예산 오류 · 양의 정수 필요");
   }
   if (format === "custom") {
     let mapping: Record<string, unknown>;
     try { mapping = JSON.parse(config.customMapping); }
-    catch { throw new Error("추론 레벨별 JSON 매핑 문법이 올바르지 않습니다."); }
+    catch { throw new Error("추론 레벨별 JSON 매핑 문법 오류"); }
     const value = mapping && !Array.isArray(mapping) ? mapping[level] : undefined;
     if (!value || Array.isArray(value) || typeof value !== "object") {
-      throw new Error(`추론 JSON 매핑에 ${level} 객체가 필요합니다.`);
+      throw new Error(`추론 JSON 매핑 오류 · ${level} 객체 없음`);
     }
     // Exact placeholders preserve numeric and boolean JSON values.
     return JSON.parse(JSON.stringify(value), (_, item) =>
@@ -39,7 +39,7 @@ export function reasoningOptions(config: ReasoningSettings): Record<string, unkn
     return { reasoning: level === "budget" ? { max_tokens: budget } : { effort: level } };
   }
   if (level === "budget") {
-    throw new Error("토큰 예산은 reasoning 객체 또는 사용자 정의 형식에서 설정할 수 있습니다.");
+    throw new Error("토큰 예산 미지원 형식 · reasoning 또는 사용자 정의 JSON 필요");
   }
   if (format === "thinking") {
     return level === "none"
@@ -66,7 +66,7 @@ export function mergeRequestOptions(
   for (const [key, value] of Object.entries(options)) {
     if ((!nested && PROTECTED_REQUEST_FIELDS.has(key))
       || ["__proto__", "constructor", "prototype"].includes(key)) {
-      throw new Error(`추가 요청 옵션에서 ${key} 필드는 변경할 수 없습니다.`);
+      throw new Error(`추가 요청 옵션 오류 · 보호된 필드: ${key}`);
     }
     if (value === null) delete target[key];
     else if (isObject(value)) {

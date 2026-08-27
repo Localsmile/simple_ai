@@ -225,7 +225,6 @@ export function SettingsPanel({
                     <Trash2 size={15} />
                   </button>
                 </div>
-                <small>연결과 모델 선택은 대화별로 저장</small>
               </div>
 
               <label className="field-group">
@@ -247,7 +246,6 @@ export function SettingsPanel({
                   spellCheck={false}
                   placeholder="https://api.example.com/v1/chat/completions"
                 />
-                <small>기본 URL과 전체 /chat/completions URL 모두 지원</small>
               </label>
 
               <label className="field-group">
@@ -279,8 +277,7 @@ export function SettingsPanel({
 
               <label className="switch-row">
                 <span>
-                  <strong>Vision</strong>
-                  <small>현재 대화의 이미지 입력 허용</small>
+                  <strong>이미지 입력</strong>
                 </span>
                 <input
                   type="checkbox"
@@ -300,16 +297,13 @@ export function SettingsPanel({
                     placeholder={'{\n  "parameter": "value"\n}'}
                     rows={6}
                   />
-                  <small>
-                    현재 프리셋에만 저장 · 비표준 옵션 추가 · null 값은 기본 필드 제외
-                  </small>
                 </label>
               </details>
 
               <label className="switch-row">
                 <span>
                   <strong>인증정보 로컬 저장</strong>
-                  <small>모든 프리셋의 키와 MCP 토큰 저장</small>
+                  <small>API 키 · MCP 토큰</small>
                 </span>
                 <input
                   type="checkbox"
@@ -349,12 +343,9 @@ export function SettingsPanel({
                 <textarea
                   value={conversationSettings.openingMessage}
                   onChange={(event) => updateConversation("openingMessage", event.target.value)}
-                  placeholder="대화 시작 상황 · 마크다운 및 이미지 문법 지원"
+                  placeholder="시작 메시지"
                   rows={6}
                 />
-                <small>
-                  현재 대화 상단에 표시되며 첫 assistant 문맥으로 전송 · 마크다운 이미지: ![설명](URL)
-                </small>
                 {conversationSettings.openingMessage.trim() && (
                   <section className="opening-preview" aria-label="시작 메시지 미리보기">
                     <span>미리보기</span>
@@ -378,7 +369,7 @@ export function SettingsPanel({
                   value={settings.markdownImageWidth}
                   onChange={(event) => update("markdownImageWidth", Number(event.target.value))}
                 />
-                <small>모든 대화의 사용자·시작·AI 메시지에 공통 적용</small>
+                <small>공용</small>
               </label>
 
               <label className="field-group range-field">
@@ -415,7 +406,7 @@ export function SettingsPanel({
                   allowUnlimited
                   onCommit={(value) => updateConversation("contextLimit", value)}
                 />
-                <small>-1은 무제한 · 그 외에는 2048 이상의 정수</small>
+                <small>-1: 무제한 · 최소 2048</small>
               </label>
 
               <label className="field-group">
@@ -427,7 +418,7 @@ export function SettingsPanel({
                   allowUnlimited
                   onCommit={(value) => updateConversation("historyTurns", value)}
                 />
-                <small>1턴 = 사용자 메시지와 응답 · -1은 전체 대화</small>
+                <small>-1: 전체</small>
               </label>
 
               <label className="switch-row">
@@ -435,8 +426,8 @@ export function SettingsPanel({
                   <strong>토큰 한도 자동 정리</strong>
                   <small>
                     {conversationSettings.contextLimit === -1
-                      ? "무제한 설정에서는 적용되지 않음"
-                      : "오래된 메시지는 API 요청에서만 제외 · 대화 기록은 유지"}
+                      ? "비활성 · 컨텍스트 한도 없음"
+                      : "대화 기록 유지"}
                   </small>
                 </span>
                 <input
@@ -450,7 +441,6 @@ export function SettingsPanel({
               <label className="switch-row">
                 <span>
                   <strong>스트리밍</strong>
-                  <small>실시간 응답 출력</small>
                 </span>
                 <input
                   type="checkbox"

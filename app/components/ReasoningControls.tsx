@@ -11,28 +11,26 @@ export function ReasoningControls({ value, onChange }: {
   return (
     <div className="reasoning-settings">
       <label className="field-group">
-        <span className="field-label">추론 전송 형식</span>
+        <span className="field-label">추론 API 형식</span>
         <select value={value.format} onChange={(event) => onChange({
           ...value, format: event.target.value as ReasoningSettings["format"], level: "default",
         })}>
           <option value="effort">reasoning_effort</option>
-          <option value="reasoning">reasoning 객체 · 레벨 / 토큰 예산</option>
+          <option value="reasoning">reasoning</option>
           <option value="thinking">thinking + reasoning_effort</option>
-          <option value="custom">사용자 정의 · 레벨별 JSON</option>
+          <option value="custom">사용자 정의 JSON</option>
         </select>
       </label>
       <label className="field-group">
-        <span className="field-label">추론 레벨 <em>현재 대화</em></span>
+        <span className="field-label">추론 레벨 <em>API 값</em></span>
         <select value={value.level} onChange={(event) => onChange({
           ...value, level: event.target.value as ReasoningSettings["level"],
         })}>
           {levels.map((level) => <option value={level} key={level}>
-            {level === "default" ? "공급자 기본값 · 옵션 미전송"
-              : level === "none" ? "none · 추론 끄기"
-                : level === "budget" ? "토큰 예산 지정" : level}
+            {level === "default" ? "기본값"
+              : level === "budget" ? "토큰 예산" : level}
           </option>)}
         </select>
-        <small>지원 형식·레벨은 API별로 다름 · 미지원 모델은 기본값 사용 · 명시한 추론 설정 우선</small>
       </label>
       {value.level === "budget" && (
         <label className="field-group">
@@ -54,7 +52,6 @@ export function ReasoningControls({ value, onChange }: {
           <textarea value={value.customMapping} rows={7} spellCheck={false}
             placeholder={'{\n  "low": {"custom_parameter": "value"}\n}'}
             onChange={(event) => onChange({ ...value, customMapping: event.target.value })} />
-          <small>선택한 레벨의 객체만 전송 · "$budget"은 숫자 예산으로 치환 · 기본값은 매핑 미사용</small>
         </label>
       )}
     </div>

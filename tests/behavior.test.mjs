@@ -117,7 +117,7 @@ test("multiple MCP servers namespace duplicate names and route only selected too
   const mock = mockMcp();
   const { McpPool } = loadTs("app/lib/mcp.ts", { fetch: mock.fetch });
   const pool = new McpPool();
-  const session = await pool.prepare([server("a", { authType: "bearer", token: "test-token" }), server("b")], 24);
+  const session = await pool.prepare([server("a", { authType: "bearer", token: "test-token" }), server("b")]);
   const tools = session.toApiTools();
   assert.equal(tools.length, 2);
   assert.notEqual(tools[0].function.name, tools[1].function.name);
@@ -139,24 +139,26 @@ test("MCP connection cache survives tool selection changes, but not endpoint cha
   const mock = mockMcp();
   const { McpPool } = loadTs("app/lib/mcp.ts", { fetch: mock.fetch });
   const pool = new McpPool();
-  await pool.prepare([server("a")], 24);
-  const changed = await pool.prepare([server("a", { selectedTools: ["write"] })], 24);
+  await pool.prepare([server("a")]);
+  const changed = await pool.prepare([server("a", { selectedTools: ["write"] })]);
   assert.equal(mock.calls.filter((item) => item.body.method === "initialize").length, 1);
   assert.match(changed.toApiTools()[0].function.name, /write$/);
-  await pool.prepare([server("a", { url: "https://new.test/mcp" })], 24);
+  await pool.prepare([server("a", { url: "https://new.test/mcp" })]);
   assert.equal(mock.calls.filter((item) => item.body.method === "initialize").length, 2);
 });
 
-test("MCP selection and total limit never silently send unselected or partial tool sets", async () => {
+test("MCP sends exactly the selected tool set, including an empty selection", async () => {
   const mock = mockMcp();
   const { McpPool } = loadTs("app/lib/mcp.ts", { fetch: mock.fetch });
   const pool = new McpPool();
-  await assert.rejects(pool.prepare([server("a", { selectedTools: [] })], 24), /도구를 선택/);
+  const empty = await pool.prepare([server("a", { selectedTools: [] })]);
+  assert.deepEqual(empty.toApiTools(), []);
   assert.equal(mock.calls.length, 0);
-  await assert.rejects(pool.prepare([server("a", { selectedTools: null })], 1), /전송 한도/);
-  await assert.rejects(pool.prepare([server("a", { selectedTools: ["removed"] })], 24), /사라졌습니다/);
-  await assert.rejects(pool.prepare([server("a"), server("broken")], 24), /broken/);
-  const valid = await pool.prepare([server("a"), server("broken", { enabled: false })], 24);
+  const all = await pool.prepare([server("a", { selectedTools: null })]);
+  assert.equal(all.toApiTools().length, 2);
+  await assert.rejects(pool.prepare([server("a", { selectedTools: ["removed"] })]), /서버 목록에 없음/);
+  await assert.rejects(pool.prepare([server("a"), server("broken")]), /broken/);
+  const valid = await pool.prepare([server("a"), server("broken", { enabled: false })]);
   assert.equal(valid.toApiTools().length, 1);
 });
 
@@ -170,7 +172,7 @@ test("MCP waiting is cancellable and invalidation aborts the pending connection"
   const pool = new McpPool();
   const controller = new AbortController();
   const states = [];
-  const waiting = pool.prepare([server("slow")], 24, controller.signal, (_id, state) => states.push(state.status));
+  const waiting = pool.prepare([server("slow")], controller.signal, (_id, state) => states.push(state.status));
   controller.abort();
   await assert.rejects(waiting, { name: "AbortError" });
   assert.deepEqual(states, ["connecting", "error"]);
@@ -191,7 +193,7 @@ test("MCP discovery limits concurrent connections and rejects repeated paginatio
       return response;
     },
   });
-  const session = await new McpPool().prepare(Array.from({ length: 7 }, (_, i) => server(`server${i}`)), 24);
+  const session = await new McpPool().prepare(Array.from({ length: 7 }, (_, i) => server(`server${i}`)));
   assert.equal(session.toApiTools().length, 7);
   assert.equal(peak, 3);
   const repeated = loadTs("app/lib/mcp.ts", {
@@ -203,7 +205,7 @@ test("MCP discovery limits concurrent connections and rejects repeated paginatio
         : mock.fetch(url, init);
     },
   });
-  await assert.rejects(new repeated.McpPool().prepare([server("pages")], 24), /페이지 한도/);
+  await assert.rejects(new repeated.McpPool().prepare([server("pages")]), /페이지 한도/);
 });
 
 test("legacy MCP settings and credentials migrate without exposing tokens in normal settings", () => {
@@ -225,4 +227,56 @@ test("legacy MCP settings and credentials migrate without exposing tokens in nor
   saveSettings({ ...migrated, mcpServers: [] });
   assert.equal(loadSettings().mcpServers.length, 0);
   assert.equal(localStorage.getItem("simple-ai:mcp-tokens"), "{}");
+});
+
+test("fresh settings enable only web search without overriding saved opt-outs or removed servers", () => {
+  const localStorage = memoryStorage(), sessionStorage = memoryStorage();
+  const { loadSettings, saveSettings } = loadTs("app/lib/storage.ts", { window: {}, localStorage, sessionStorage });
+  const fresh = loadSettings();
+  assert.equal(fresh.mcpEnabled, true);
+  assert.equal(fresh.mcpServers.length, 1);
+  assert.equal(fresh.mcpServers[0].url, "https://mcp.exa.ai/mcp");
+  assert.equal(fresh.mcpServers[0].token, "");
+  assert.deepEqual(fresh.mcpServers[0].selectedTools, ["web_search_exa"]);
+  fresh.mcpServers[0].selectedTools.push("mutated");
+  assert.deepEqual(loadSettings().mcpServers[0].selectedTools, ["web_search_exa"]);
+  saveSettings({ ...fresh, mcpEnabled: false, mcpServers: [] });
+  assert.equal(loadSettings().mcpEnabled, false);
+  assert.deepEqual(loadSettings().mcpServers, []);
+  localStorage.setItem("simple-ai:settings", JSON.stringify({ ...fresh, mcpToolLimit: 24 }));
+  const migrated = loadSettings();
+  assert.equal(migrated.mcpToolLimit, undefined);
+  saveSettings(migrated);
+  assert.doesNotMatch(localStorage.getItem("simple-ai:settings"), /mcpToolLimit/);
+});
+
+test("MCP exposes all selected tools beyond the former 24 and 128 limits", async () => {
+  const names = Array.from({ length: 160 }, (_, i) => `tool_${i}`);
+  const mock = mockMcp();
+  const { McpPool } = loadTs("app/lib/mcp.ts", {
+    fetch: async (url, init) => {
+      const body = JSON.parse(init.body);
+      return body.method === "tools/list"
+        ? new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: { tools: names.map(tool) } }),
+            { headers: { "Content-Type": "application/json" } })
+        : mock.fetch(url, init);
+    },
+  });
+  const session = await new McpPool().prepare([
+    server("a", { selectedTools: names }), server("b", { selectedTools: names }),
+  ]);
+  assert.equal(session.toApiTools().length, 320);
+  assert.equal(new Set(session.toApiTools().map((item) => item.function.name)).size, 320);
+});
+
+test("MCP preset feedback distinguishes registration from connection and never duplicates URLs", () => {
+  const { findPresetServer, mcpPresetState } = loadTs("app/lib/mcp-config.ts");
+  const existing = server("registered");
+  assert.equal(mcpPresetState().label, "연결 추가");
+  assert.equal(mcpPresetState(existing).label, "추가됨");
+  assert.equal(mcpPresetState(existing, { status: "connecting" }).label, "연결 중");
+  assert.equal(mcpPresetState(existing, { status: "connected" }).label, "연결됨");
+  assert.equal(mcpPresetState(existing, { status: "error" }).label, "연결 오류");
+  assert.equal(mcpPresetState({ ...existing, enabled: false }).label, "추가됨 · 꺼짐");
+  assert.equal(findPresetServer([existing], ` ${existing.url}/ `), existing);
 });
