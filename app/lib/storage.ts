@@ -1,6 +1,6 @@
 import type { AppSettings, Conversation, ProviderPreset, McpServerConfig, McpAuthType } from "../types";
 import { DEFAULT_PROVIDER_PRESET, DEFAULT_SETTINGS } from "../types";
-import { normalizeReasoning } from "./reasoning";
+import { configuredReasoningLevels, normalizeReasoning, resolvePresetReasoning } from "./reasoning";
 
 const DB_NAME = "simple-ai";
 const DB_VERSION = 1;
@@ -101,7 +101,8 @@ function normalizePresets(saved: Partial<AppSettings> & LegacySettings): Provide
       model: typeof preset.model === "string" ? preset.model : "",
       vision: Boolean(preset.vision),
       extraBody: typeof preset.extraBody === "string" ? preset.extraBody : "",
-      reasoning: normalizeReasoning(preset.reasoning),
+      reasoning: resolvePresetReasoning(preset),
+      reasoningLevels: configuredReasoningLevels(normalizeReasoning(preset.reasoning), preset.reasoningLevels),
     }));
   }
 
@@ -211,6 +212,7 @@ export function saveSettings(settings: AppSettings): void {
       vision: preset.vision,
       extraBody: preset.extraBody,
       reasoning: preset.reasoning,
+      reasoningLevels: preset.reasoningLevels,
     })),
   };
   for (const key of ["mcpUrl", "mcpAuthType", "mcpToken", "mcpToolLimit"] as const) {

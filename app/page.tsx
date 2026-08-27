@@ -43,7 +43,7 @@ import {
 import { planRequestContext } from "./lib/context";
 import { MAX_IMAGE_SOURCE_SIZE, optimizeImageToWebp } from "./lib/image";
 import { McpPool, mcpConnectionKey } from "./lib/mcp";
-import { normalizeReasoning } from "./lib/reasoning";
+import { configuredReasoningLevels, reasoningLevelLabel, resolvePresetReasoning } from "./lib/reasoning";
 import { enterSendsMessage, shouldSendMessage } from "./lib/input";
 import {
   deleteConversation,
@@ -60,6 +60,7 @@ import type {
   ConversationSettings,
   ContextTrimInfo,
   McpConnectionState,
+  ReasoningLevel,
   ResponseVariant,
   TokenUsage,
   ToolEvent,
@@ -99,7 +100,7 @@ function conversationSettingsFromApp(settings: AppSettings): ConversationSetting
     historyTurns: settings.historyTurns,
     autoTrimContext: settings.autoTrimContext,
     stream: settings.stream,
-    reasoning: { ...provider.reasoning },
+    reasoning: resolvePresetReasoning(provider),
   };
 }
 
@@ -165,7 +166,7 @@ function normalizeConversation(
         ? stored.autoTrimContext
         : appSettings.autoTrimContext,
       stream: typeof stored?.stream === "boolean" ? stored.stream : appSettings.stream,
-      reasoning: normalizeReasoning(stored?.reasoning),
+      reasoning: resolvePresetReasoning(provider, stored?.reasoning?.level),
     },
   } as Conversation & { requestBodyProfile?: unknown };
   const currentTitle = typeof conversation.title === "string" ? conversation.title.trim() : "";
@@ -198,7 +199,6 @@ function syncAppDefaults(
             ...preset,
             model: conversationSettings.model,
             vision: conversationSettings.vision,
-            reasoning: { ...conversationSettings.reasoning },
           }
         : preset,
     ),
@@ -503,6 +503,8 @@ export default function Home() {
       vision: conversation.settings.vision,
     };
   }, [conversation.settings, settings]);
+  const conversationReasoning = resolvePresetReasoning(activeProvider, conversation.settings.reasoning.level);
+  const reasoningLevels = configuredReasoningLevels(activeProvider.reasoning, activeProvider.reasoningLevels);
 
   const requestSettings = useMemo<AppSettings>(() => ({
     ...settings,
@@ -571,8 +573,14 @@ export default function Home() {
             providerPresetId: provider.id,
             model: provider.model,
             vision: provider.vision,
-            reasoning: { ...provider.reasoning },
+            reasoning: resolvePresetReasoning(provider),
           });
+        }
+      } else {
+        const previous = settings.providerPresets.find((preset) => preset.id === conversation.settings.providerPresetId);
+        const updated = next.providerPresets.find((preset) => preset.id === conversation.settings.providerPresetId);
+        if (updated && (updated.reasoning !== previous?.reasoning || updated.reasoningLevels !== previous?.reasoningLevels)) {
+          applyConversationSettings({ ...conversation.settings, reasoning: resolvePresetReasoning(updated) });
         }
       }
       setSettings(next);
@@ -593,7 +601,7 @@ export default function Home() {
       providerPresetId: provider.id,
       model: provider.model,
       vision: provider.vision,
-      reasoning: { ...provider.reasoning },
+      reasoning: resolvePresetReasoning(provider),
     });
   }, [changeConversationSettings, conversation.settings, settings.providerPresets]);
 
@@ -936,6 +944,7 @@ export default function Home() {
     const providerPreset = settings.providerPresets.find(
       (item) => item.id === seedConversation.settings.providerPresetId,
     ) || getActiveProvider(settings);
+    const responseReasoning = resolvePresetReasoning(providerPreset, seedConversation.settings.reasoning.level);
     const responseProvider = {
       ...providerPreset,
       model: seedConversation.settings.model,
@@ -967,6 +976,7 @@ export default function Home() {
     };
     const workingConversation: Conversation = {
       ...seedConversation,
+      settings: { ...seedConversation.settings, reasoning: responseReasoning },
       title: titleAfterMessageChange(seedConversation, baseMessages),
       updatedAt: timestamp(),
       messages: [...baseMessages, assistantMessage],
@@ -1034,7 +1044,7 @@ export default function Home() {
         const result = await requestCompletion({
           settings: responseSettings,
           provider: responseProvider,
-          reasoning: seedConversation.settings.reasoning,
+          reasoning: responseReasoning,
           messages: apiMessages,
           tools: apiTools,
           signal: abortController.signal,
@@ -1623,6 +1633,19 @@ export default function Home() {
                     <option key={preset.id} value={preset.id}>{preset.name}</option>
                   ))}
                 </select>
+                <label className="composer-reasoning">
+                  <span>추론</span>
+                  <select value={conversationReasoning.level} disabled={generating}
+                    aria-label="추론 레벨" title="추론 레벨"
+                    onChange={(event) => applyConversationSettings({
+                      ...conversation.settings,
+                      reasoning: resolvePresetReasoning(activeProvider, event.target.value as ReasoningLevel),
+                    })}>
+                    {reasoningLevels.map((level) => <option value={level} key={level}>
+                      {reasoningLevelLabel(level)}{level === "budget" ? ` · ${conversationReasoning.budget}` : ""}
+                    </option>)}
+                  </select>
+                </label>
                 <button type="button" className={`vision-toggle ${activeProvider.vision ? "on" : ""}`}
                   aria-label="이미지 입력" aria-pressed={activeProvider.vision} disabled={generating}
                   onClick={() => changeConversationSettings({ ...conversation.settings, vision: !activeProvider.vision })}>

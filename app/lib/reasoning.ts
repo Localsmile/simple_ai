@@ -1,4 +1,4 @@
-import { DEFAULT_REASONING, type ReasoningSettings, type ReasoningLevel } from "../types";
+import { DEFAULT_REASONING, type ProviderPreset, type ReasoningSettings, type ReasoningLevel } from "../types";
 
 export const REASONING_LEVELS: ReasoningLevel[] = [
   "default", "none", "minimal", "low", "medium", "high", "xhigh", "max", "budget",
@@ -14,6 +14,37 @@ export function normalizeReasoning(value?: Partial<ReasoningSettings>): Reasonin
       ? value!.budget! : DEFAULT_REASONING.budget,
     customMapping: typeof value?.customMapping === "string" ? value.customMapping : "",
   };
+}
+
+export function reasoningLevelsForFormat(format: ReasoningSettings["format"]): ReasoningLevel[] {
+  return REASONING_LEVELS.filter((level) => {
+    if (format === "thinking") return ["default", "none", "low", "high", "max"].includes(level);
+    return level !== "budget" || format === "reasoning" || format === "custom";
+  });
+}
+
+export function configuredReasoningLevels(
+  reasoning: ReasoningSettings,
+  selected?: ReasoningLevel[],
+): ReasoningLevel[] {
+  const available = reasoningLevelsForFormat(normalizeReasoning(reasoning).format);
+  if (!Array.isArray(selected)) return available;
+  const levels = available.filter((level) => selected.includes(level));
+  return levels.length ? levels : ["default"];
+}
+
+export function resolvePresetReasoning(
+  preset: Pick<ProviderPreset, "reasoning" | "reasoningLevels">,
+  level?: ReasoningLevel,
+): ReasoningSettings {
+  const config = normalizeReasoning(preset.reasoning);
+  const levels = configuredReasoningLevels(config, preset.reasoningLevels);
+  const defaultLevel = levels.includes(config.level) ? config.level : levels[0];
+  return { ...config, level: level && levels.includes(level) ? level : defaultLevel };
+}
+
+export function reasoningLevelLabel(level: ReasoningLevel): string {
+  return level === "default" ? "API 기본값" : level === "budget" ? "토큰 예산" : level;
 }
 
 export function reasoningOptions(config: ReasoningSettings): Record<string, unknown> {

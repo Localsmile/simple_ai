@@ -53,6 +53,61 @@ test("per-request reasoning overrides the preset without mutating it", async () 
   assert.equal(provider.reasoning.level, "high");
 });
 
+test("preset reasoning keeps selectable levels, defaults and conversation overrides separate", () => {
+  const { configuredReasoningLevels, resolvePresetReasoning } = loadTs("app/lib/reasoning.ts");
+  const preset = { reasoning: { ...DEFAULT_REASONING, format: "thinking", level: "high" },
+    reasoningLevels: ["high", "low", "low", "budget", "medium"] };
+  const original = JSON.stringify(preset);
+  assert.deepEqual(configuredReasoningLevels(preset.reasoning, preset.reasoningLevels), ["low", "high"]);
+  const firstChat = resolvePresetReasoning(preset, "low");
+  assert.equal(firstChat.level, "low");
+  assert.equal(resolvePresetReasoning(preset).level, "high");
+  assert.equal(resolvePresetReasoning(preset, "max").level, "high");
+  assert.equal(JSON.stringify(preset), original);
+  const changedPreset = { reasoning: { ...DEFAULT_REASONING, format: "reasoning", level: "high" },
+    reasoningLevels: ["low", "high"] };
+  assert.deepEqual(resolvePresetReasoning(changedPreset, firstChat.level), {
+    ...DEFAULT_REASONING, format: "reasoning", level: "low",
+  });
+  assert.equal(resolvePresetReasoning({ ...preset, reasoningLevels: ["low"] }).level, "low");
+  assert.equal(resolvePresetReasoning({ ...preset, reasoningLevels: [] }).level, "default");
+});
+
+test("quick reasoning selection uses the configured budget and custom mapping in requests", () => {
+  const { resolvePresetReasoning } = loadTs("app/lib/reasoning.ts");
+  const { serializeCompletionRequest } = loadTs("app/lib/api.ts");
+  for (const format of ["reasoning", "custom"]) {
+    const preset = { ...DEFAULT_PROVIDER_PRESET, reasoning: {
+      ...DEFAULT_REASONING, format, level: "low", budget: 8192,
+      customMapping: '{"low":{"thinking_budget":128},"budget":{"thinking_budget":"$budget"}}',
+    }, reasoningLevels: ["low", "budget"] };
+    const request = JSON.parse(serializeCompletionRequest(DEFAULT_SETTINGS, preset, [], undefined,
+      resolvePresetReasoning(preset, "budget")));
+    if (format === "reasoning") assert.deepEqual(request.reasoning, { max_tokens: 8192 });
+    else assert.equal(request.thinking_budget, 8192);
+    assert.equal(preset.reasoning.level, "low");
+  }
+});
+
+test("reasoning preset settings persist independently and migrate legacy presets", () => {
+  const localStorage = memoryStorage(), sessionStorage = memoryStorage();
+  const { loadSettings, saveSettings } = loadTs("app/lib/storage.ts", { window: {}, localStorage, sessionStorage });
+  const presets = [
+    { ...DEFAULT_PROVIDER_PRESET, id: "first", reasoning: { ...DEFAULT_REASONING, level: "high" }, reasoningLevels: ["low", "high"] },
+    { ...DEFAULT_PROVIDER_PRESET, id: "second", reasoning: { ...DEFAULT_REASONING, format: "reasoning", level: "budget", budget: 4096 }, reasoningLevels: ["budget"] },
+  ];
+  saveSettings({ ...DEFAULT_SETTINGS, providerPresets: presets });
+  const reloaded = loadSettings().providerPresets;
+  assert.deepEqual(reloaded.map(({ reasoning, reasoningLevels }) => ({ reasoning, reasoningLevels })),
+    presets.map(({ reasoning, reasoningLevels }) => ({ reasoning, reasoningLevels })));
+  localStorage.setItem("simple-ai:settings", JSON.stringify({ providerPresets: [
+    { ...DEFAULT_PROVIDER_PRESET, reasoning: { ...DEFAULT_REASONING, format: "thinking", level: "max" } },
+  ] }));
+  const legacy = loadSettings().providerPresets[0];
+  assert.equal(legacy.reasoning.level, "max");
+  assert.deepEqual(legacy.reasoningLevels, ["default", "none", "low", "high", "max"]);
+});
+
 test("mobile Enter creates a newline; explicit shortcuts and IME remain safe", () => {
   const { shouldSendMessage, enterSendsMessage } = loadTs("app/lib/input.ts");
   const enter = { key: "Enter", ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, isComposing: false };

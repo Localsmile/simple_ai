@@ -99,6 +99,7 @@ export interface ProviderPreset {
   vision: boolean;
   extraBody: string;
   reasoning: ReasoningSettings;
+  reasoningLevels?: ReasoningLevel[];
 }
 
 export type ReasoningLevel = "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "budget";

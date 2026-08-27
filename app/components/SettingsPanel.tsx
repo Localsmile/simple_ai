@@ -286,6 +286,13 @@ export function SettingsPanel({
                 />
               </label>
 
+              <ReasoningControls value={activeProvider.reasoning} selectedLevels={activeProvider.reasoningLevels}
+                onChange={(reasoning, reasoningLevels) => onChange({
+                  ...settings,
+                  providerPresets: settings.providerPresets.map((preset) => preset.id === activeProvider.id
+                    ? { ...preset, reasoning, reasoningLevels } : preset),
+                })} />
+
               <details className="advanced-request">
                 <summary>추가 요청 옵션</summary>
                 <label className="field-group">
@@ -316,8 +323,6 @@ export function SettingsPanel({
 
           {tab === "generation" && (
             <section className="settings-section">
-              <ReasoningControls value={conversationSettings.reasoning}
-                onChange={(value) => updateConversation("reasoning", value)} />
               <label className="field-group">
                 <span className="field-label">메시지 전송 키 <em>공용 설정</em></span>
                 <select value={settings.sendKey}

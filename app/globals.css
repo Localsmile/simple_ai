@@ -1233,6 +1233,11 @@ a:focus-visible {
 .composer-preset-select:hover:not(:disabled),
 .composer-preset-select:focus { border-color: var(--line-strong); color: var(--text); }
 
+.composer-reasoning { display: inline-flex; align-items: center; gap: 6px; height: 30px; max-width: min(240px, 60vw); min-width: 0; padding-left: 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2); }
+.composer-reasoning > span { flex-shrink: 0; color: var(--text-dim); font-size: 10px; }
+.composer-reasoning select { min-width: 0; max-width: 190px; height: 100%; padding: 0 22px 0 2px; border: 0; border-radius: 7px; outline: 0; background: transparent; color: var(--text-soft); font-size: 10px; text-overflow: ellipsis; }
+.composer-reasoning:focus-within { border-color: var(--line-strong); }
+
 .composer-tools > .vision-toggle {
   display: inline-flex;
   width: auto;
@@ -1447,6 +1452,12 @@ a:focus-visible {
 .settings-content { min-height: 0; overflow: auto; }
 .settings-section { display: flex; flex-direction: column; gap: 20px; padding: 22px; }
 .reasoning-settings { display: grid; gap: 14px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+.reasoning-level-options { min-width: 0; margin: 0; padding: 0; border: 0; }
+.reasoning-level-options legend { margin-bottom: 8px; padding: 0; color: var(--text-soft); font-size: 11px; font-weight: 560; }
+.reasoning-level-options > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.reasoning-level-options label { display: inline-flex; align-items: center; gap: 5px; min-height: 34px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 7px; color: var(--text-soft); font-size: 11px; cursor: pointer; }
+.reasoning-level-options label:has(input:checked) { background: var(--panel-3); border-color: var(--line-strong); color: var(--text); }
+.reasoning-level-options input { width: 13px; height: 13px; margin: 0; accent-color: var(--accent); }
 .mcp-server-list { display: grid; gap: 6px; }
 .mcp-server-list > div { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; }
 .mcp-server-list > div.selected { border-color: var(--line-strong); background: var(--panel-3); }
@@ -1619,6 +1630,7 @@ a:focus-visible {
   .composer-tools > button,
   .send-button { width: 40px; height: 40px; }
   .composer-tools > .vision-toggle { height: 40px; }
+  .composer-reasoning { height: 40px; }
   .composer-preset-select { width: min(126px, 35vw); }
   .settings-panel { width: 100vw; }
   .settings-section { padding: 18px; }

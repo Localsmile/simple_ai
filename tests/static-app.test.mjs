@@ -205,6 +205,30 @@ test("binds connection and generation settings to each conversation", async () =
   assert.match(settings, /conversationSettings\.systemPrompt/);
 });
 
+test("edits preset reasoning in the connection tab and conversation levels beside the composer model", async () => {
+  const [page, settings, controls] = await Promise.all([
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/components/SettingsPanel.tsx", root), "utf8"),
+    readFile(new URL("app/components/ReasoningControls.tsx", root), "utf8"),
+  ]);
+  const connection = settings.slice(settings.indexOf('tab === "connection" &&'), settings.indexOf('tab === "generation" &&'));
+  const generation = settings.slice(settings.indexOf('tab === "generation" &&'));
+  assert.match(connection, /ReasoningControls value=\{activeProvider\.reasoning\}/);
+  assert.match(connection, /selectedLevels=\{activeProvider\.reasoningLevels\}/);
+  assert.doesNotMatch(generation, /ReasoningControls/);
+  assert.match(controls, /사용할 추론 레벨/);
+  assert.match(controls, /기본 추론 레벨/);
+  const defaults = page.slice(page.indexOf("function syncAppDefaults("), page.indexOf("function newConversation("));
+  assert.doesNotMatch(defaults, /reasoning/);
+  assert.match(page, /reasoning: resolvePresetReasoning\(provider, stored\?\.reasoning\?\.level\)/);
+  assert.match(page, /reasoning: responseReasoning/);
+  const composer = page.slice(page.indexOf('className="composer-reasoning"'), page.indexOf('className={`vision-toggle'));
+  assert.match(composer, /value=\{conversationReasoning\.level\} disabled=\{generating\}/);
+  assert.match(composer, /reasoningLevels\.map/);
+  assert.match(composer, /applyConversationSettings/);
+  assert.doesNotMatch(composer, /setSettings|changeSettings|changeConversationSettings/);
+});
+
 test("supports a per-conversation markdown opening message", async () => {
   const [types, page, api, planner, settings, messageList] = await Promise.all([
     readFile(new URL("app/types.ts", root), "utf8"),
