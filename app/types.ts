@@ -94,6 +94,7 @@ export interface ProviderPreset {
   id: string;
   name: string;
   baseUrl: string;
+  connectionMode: "direct" | "nvidia-proxy";
   apiKey: string;
   model: string;
   vision: boolean;
@@ -174,6 +175,7 @@ export const DEFAULT_PROVIDER_PRESET: ProviderPreset = {
   id: "default",
   name: "연결 1",
   baseUrl: "",
+  connectionMode: "direct",
   apiKey: "",
   model: "",
   vision: false,

@@ -1,6 +1,6 @@
 # Simple AI
 
-OpenAI 호환 Chat Completions API를 위한 브라우저 기반 채팅 클라이언트. 별도 백엔드 없이 사용자 지정 API에 직접 연결하며, 대화와 설정은 브라우저에 저장한다.
+OpenAI 호환 Chat Completions API를 위한 브라우저 기반 채팅 클라이언트. 사용자 지정 API에 직접 연결하며, NVIDIA API에는 선택형 Cloudflare 중계를 제공한다. 대화와 설정은 브라우저에 저장한다.
 
 [웹 앱](https://localsmile.github.io/simple_ai/)
 
@@ -25,6 +25,12 @@ OpenAI 호환 Chat Completions API를 위한 브라우저 기반 채팅 클라�
 4. 입력창에서 프리셋을 선택하고 메시지 전송.
 
 엔드포인트는 API 기본 경로 또는 `/chat/completions`까지 포함한 전체 주소를 지원한다. 이미지 입력, 추론, 도구 호출은 연결한 API와 모델이 해당 요청 형식을 지원해야 한다.
+
+### NVIDIA API 연결
+
+`https://integrate.api.nvidia.com/v1`을 엔드포인트로 등록한 뒤 **연결 방식 → Cloudflare 중계 · NVIDIA**를 선택한다. 모델 ID와 API 키는 NVIDIA에서 발급한 값을 사용한다. 모델의 추가 요청 옵션과 추론 설정은 그대로 전달된다.
+
+중계는 브라우저 직접 호출의 CORS 제약을 해결하며, 스트리밍·일반 JSON 응답을 지원한다. 연결 방식은 프리셋별로 저장된다. 기존 프리셋과 새 프리셋의 기본값은 직접 연결이다. 다른 공급자는 직접 연결을 사용한다.
 
 ### 대화와 메시지
 
@@ -88,9 +94,10 @@ OpenAI 호환 Chat Completions API를 위한 브라우저 기반 채팅 클라�
 - 인증정보는 앱에서 암호화하지 않는다. 같은 출처의 스크립트와 브라우저 접근 권한이 있는 환경에서 읽을 수 있다.
 - 대화와 인증정보를 GitHub 저장소에 업로드하거나 기기 간 동기화하는 기능은 없다. 브라우저 데이터 삭제 시 저장된 대화와 설정도 삭제된다.
 - 메시지 전송 시 선택된 대화 내용과 첨부 파일은 연결한 API로 전송된다. MCP 호출 인자는 해당 MCP 서버로 전송되며, 도구 결과는 모델에 전달된다.
+- NVIDIA 중계 사용 시 API 키·메시지·첨부·응답은 Cloudflare를 경유한다. 중계 Worker는 이를 저장·캐시·로그 기록하지 않으며, 사용자별 API 키를 해당 요청의 NVIDIA 인증에만 전달한다. Cloudflare와 NVIDIA의 서비스 처리·보존 정책은 별도로 적용된다.
 - 외부 URL의 Markdown 이미지는 표시 과정에서 해당 이미지 서버에 요청한다.
 
-API와 MCP 서버는 브라우저 직접 호출을 위한 CORS를 허용해야 한다. HTTPS로 배포된 앱에서 일반 HTTP 원격 서버 호출은 혼합 콘텐츠 정책에 의해 차단될 수 있다. MCP 서버는 필요한 프로토콜·세션 헤더도 허용·노출해야 한다.
+직접 연결하는 API와 MCP 서버는 브라우저 호출을 위한 CORS를 허용해야 한다. HTTPS로 배포된 앱에서 일반 HTTP 원격 서버 호출은 혼합 콘텐츠 정책에 의해 차단될 수 있다. MCP 서버는 필요한 프로토콜·세션 헤더도 허용·노출해야 한다.
 
 ## 로컬 개발
 
@@ -127,3 +134,5 @@ npm run preview
 ## 기술 구성
 
 React 19 · TypeScript · Vite · react-markdown · remark-gfm · rehype-highlight · IndexedDB
+
+선택형 NVIDIA 중계는 별도 [Cloudflare Worker](workers/nvidia-proxy/README.md)로 관리한다. GitHub Pages 배포에는 Worker 배포가 포함되지 않는다.

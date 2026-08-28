@@ -1,0 +1,17 @@
+{
+  "name": "simple-ai-nvidia-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --config wrangler.jsonc",
+    "types": "wrangler types --config wrangler.jsonc",
+    "typecheck": "npm run types && tsc --noEmit",
+    "deploy": "wrangler deploy --config wrangler.jsonc",
+    "dry-run": "wrangler deploy --config wrangler.jsonc --dry-run"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "wrangler": "4.127.1"
+  }
+}

@@ -7,6 +7,8 @@ import type {
   TokenUsage,
 } from "../types";
 import { mergeRequestOptions, reasoningOptions } from "./reasoning";
+import { resolveCompletionUrl } from "./connection";
+export { resolveChatUrl } from "./connection";
 
 export type ApiMessage = Record<string, unknown>;
 
@@ -144,12 +146,6 @@ function normalizeUsage(usage?: RawUsage): TokenUsage | undefined {
       ?? usage.output_tokens_details?.reasoning_tokens
       ?? 0,
   };
-}
-
-export function resolveChatUrl(baseUrl: string): string {
-  const normalized = baseUrl.trim().replace(/\/+$/, "");
-  if (/\/chat\/completions$/i.test(normalized)) return normalized;
-  return `${normalized}/chat/completions`;
 }
 
 function fileContext(message: ChatMessage): string {
@@ -335,6 +331,7 @@ export async function requestCompletion({
   onDelta,
   onReasoningDelta,
 }: CompletionOptions): Promise<CompletionResult> {
+  const requestUrl = resolveCompletionUrl(provider);
   const serializedBody = serializeCompletionRequest(settings, provider, messages, tools, reasoningSettings);
 
   const headers = new Headers({ "Content-Type": "application/json" });
@@ -344,16 +341,19 @@ export async function requestCompletion({
 
   let response: Response;
   try {
-    response = await fetch(resolveChatUrl(provider.baseUrl), {
+    response = await fetch(requestUrl, {
       method: "POST",
       headers,
       body: serializedBody,
       signal,
+      ...(provider.connectionMode === "nvidia-proxy" ? { credentials: "omit" as const, redirect: "error" as const } : {}),
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;
     throw new Error(
-      "API 연결 실패 · 엔드포인트 / 네트워크 / CORS 오류",
+      provider.connectionMode === "nvidia-proxy"
+        ? "Cloudflare 중계 연결 실패 · 네트워크 / 접근 허용 출처 확인"
+        : "API 연결 실패 · 엔드포인트 / 네트워크 / CORS 오류",
     );
   }
 

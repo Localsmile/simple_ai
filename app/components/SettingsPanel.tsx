@@ -18,6 +18,7 @@ import { DEFAULT_REASONING, getActiveProvider } from "../types";
 import { ReasoningControls } from "./ReasoningControls";
 import { McpSettings } from "./McpSettings";
 import { MarkdownView } from "./MarkdownView";
+import { supportsNvidiaProxy } from "../lib/connection";
 
 type SettingsTab = "connection" | "generation" | "mcp";
 
@@ -134,6 +135,7 @@ export function SettingsPanel({
       id: presetId(),
       name: `연결 ${settings.providerPresets.length + 1}`,
       baseUrl: "",
+      connectionMode: "direct",
       apiKey: "",
       model: "",
       vision: false,
@@ -246,6 +248,27 @@ export function SettingsPanel({
                   spellCheck={false}
                   placeholder="https://api.example.com/v1/chat/completions"
                 />
+              </label>
+
+              <label className="field-group">
+                <span className="field-label">연결 방식</span>
+                <select
+                  value={activeProvider.connectionMode}
+                  onChange={(event) => updateProvider("connectionMode",
+                    event.target.value === "nvidia-proxy" ? "nvidia-proxy" : "direct")}
+                >
+                  <option value="direct">직접 연결</option>
+                  <option value="nvidia-proxy" disabled={!supportsNvidiaProxy(activeProvider.baseUrl)}>
+                    Cloudflare 중계 · NVIDIA
+                  </option>
+                </select>
+                {activeProvider.connectionMode === "nvidia-proxy" && (
+                  <small>
+                    {supportsNvidiaProxy(activeProvider.baseUrl)
+                      ? "API 키·메시지: Cloudflare 경유 · 중계 서버 저장 없음"
+                      : "중계 미지원 엔드포인트 · 직접 연결 필요"}
+                  </small>
+                )}
               </label>
 
               <label className="field-group">

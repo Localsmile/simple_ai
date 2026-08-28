@@ -1,0 +1,21 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "simple-ai-nvidia-proxy",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-28",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "limits": { "cpu_ms": 50 },
+  // Credential-bearing requests must not be recorded in Workers Logs or traces.
+  "observability": { "enabled": false },
+  "vars": {
+    "ALLOWED_ORIGINS": "https://localsmile.github.io",
+    "ALLOW_LOCALHOST": "true"
+  },
+  "ratelimits": [{
+    "name": "REQUEST_LIMITER",
+    "namespace_id": "2048202608",
+    "simple": { "limit": 120, "period": 60 }
+  }]
+}
