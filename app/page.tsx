@@ -820,9 +820,13 @@ export default function Home() {
   };
 
   const copyMessage = async (message: ChatMessage) => {
-    await navigator.clipboard.writeText(message.content);
-    setCopiedId(message.id);
-    window.setTimeout(() => setCopiedId(""), 1400);
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopiedId(message.id);
+      window.setTimeout(() => setCopiedId((current) => current === message.id ? "" : current), 1400);
+    } catch {
+      setComposerError("클립보드 복사 실패");
+    }
   };
 
   const beginEditMessage = (message: ChatMessage) => {
@@ -1592,6 +1596,41 @@ export default function Home() {
 
           {composerError && <div className="composer-error">{composerError}</div>}
 
+          <div className="composer-settings" role="group" aria-label="모델 및 입력 설정">
+            <select
+              className="composer-preset-select"
+              value={conversation.settings.providerPresetId}
+              onChange={(event) => swapConversationProvider(event.target.value)}
+              disabled={generating}
+              aria-label="API 프리셋 빠른 전환"
+              title={`${activeProvider.name} · ${activeProvider.model}`}
+            >
+              {settings.providerPresets.map((preset) => (
+                <option key={preset.id} value={preset.id}>{preset.name}</option>
+              ))}
+            </select>
+            <label className="composer-reasoning">
+              <span>추론</span>
+              <select value={conversationReasoning.level} disabled={generating}
+                aria-label="추론 레벨" title="추론 레벨"
+                onChange={(event) => applyConversationSettings({
+                  ...conversation.settings,
+                  reasoning: resolvePresetReasoning(activeProvider, event.target.value as ReasoningLevel),
+                })}>
+                {reasoningLevels.map((level) => <option value={level} key={level}>
+                  {reasoningLevelLabel(level)}{level === "budget" ? ` · ${conversationReasoning.budget}` : ""}
+                </option>)}
+              </select>
+            </label>
+            <button type="button" className={`vision-toggle ${activeProvider.vision ? "on" : ""}`}
+              aria-label="이미지 입력" aria-pressed={activeProvider.vision} disabled={generating}
+              title={`이미지 입력 ${activeProvider.vision ? "켜짐" : "꺼짐"}`}
+              onClick={() => changeConversationSettings({ ...conversation.settings, vision: !activeProvider.vision })}>
+              <ImageIcon size={13} />
+              <span>이미지 <strong>{activeProvider.vision ? "ON" : "OFF"}</strong></span>
+            </button>
+          </div>
+
           <div className="composer">
             <textarea
               ref={textareaRef}
@@ -1620,37 +1659,6 @@ export default function Home() {
                 />
                 <button type="button" onClick={() => fileInputRef.current?.click()} aria-label="파일 첨부" title="파일 첨부">
                   <Paperclip size={17} />
-                </button>
-                <select
-                  className="composer-preset-select"
-                  value={conversation.settings.providerPresetId}
-                  onChange={(event) => swapConversationProvider(event.target.value)}
-                  disabled={generating}
-                  aria-label="API 프리셋 빠른 전환"
-                  title="API 프리셋"
-                >
-                  {settings.providerPresets.map((preset) => (
-                    <option key={preset.id} value={preset.id}>{preset.name}</option>
-                  ))}
-                </select>
-                <label className="composer-reasoning">
-                  <span>추론</span>
-                  <select value={conversationReasoning.level} disabled={generating}
-                    aria-label="추론 레벨" title="추론 레벨"
-                    onChange={(event) => applyConversationSettings({
-                      ...conversation.settings,
-                      reasoning: resolvePresetReasoning(activeProvider, event.target.value as ReasoningLevel),
-                    })}>
-                    {reasoningLevels.map((level) => <option value={level} key={level}>
-                      {reasoningLevelLabel(level)}{level === "budget" ? ` · ${conversationReasoning.budget}` : ""}
-                    </option>)}
-                  </select>
-                </label>
-                <button type="button" className={`vision-toggle ${activeProvider.vision ? "on" : ""}`}
-                  aria-label="이미지 입력" aria-pressed={activeProvider.vision} disabled={generating}
-                  onClick={() => changeConversationSettings({ ...conversation.settings, vision: !activeProvider.vision })}>
-                  <ImageIcon size={13} />
-                  <span>이미지 입력 <strong>{activeProvider.vision ? "켜짐" : "꺼짐"}</strong></span>
                 </button>
               </div>
               <div className="composer-submit">

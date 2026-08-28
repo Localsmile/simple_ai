@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -14,10 +14,17 @@ export function loadTs(entry, globals = {}) {
     const module = { exports: {} };
     cache.set(filename, module);
     const source = ts.transpileModule(readFileSync(filename, "utf8"), {
-      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+      fileName: filename,
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022,
+        jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true,
+      },
     }).outputText;
-    const require = (name) => name.startsWith(".")
-      ? load(resolve(dirname(filename), `${name.replace(/\.ts$/, "")}.ts`)) : nativeRequire(name);
+    const require = (name) => {
+      if (!name.startsWith(".")) return nativeRequire(name);
+      const base = resolve(dirname(filename), name.replace(/\.tsx?$/, ""));
+      return load(existsSync(`${base}.ts`) ? `${base}.ts` : `${base}.tsx`);
+    };
     // Only trusted project modules are evaluated; each test gets isolated mocks.
     new Function("require", "module", "exports", ...Object.keys(globals), source)(
       require, module, module.exports, ...Object.values(globals),

@@ -1,8 +1,8 @@
 "use client";
 
-import { Check, Copy, ExternalLink } from "lucide-react";
-import { Children, isValidElement, memo, type ReactNode, useState } from "react";
-import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import { Check, CircleAlert, Copy, ExternalLink } from "lucide-react";
+import { Children, isValidElement, memo, type CSSProperties, type ReactNode, useEffect, useRef, useState } from "react";
+import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 
@@ -16,20 +16,35 @@ function getText(node: ReactNode): string {
 }
 
 function CodeBlock({ children }: { children?: ReactNode }) {
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const copyAttempt = useRef(0);
   const text = getText(children).replace(/\n$/, "");
 
+  useEffect(() => () => {
+    clearTimeout(resetTimer.current);
+    copyAttempt.current += 1;
+  }, []);
+
   const copy = async () => {
-    await navigator.clipboard.writeText(text);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1400);
+    const attempt = ++copyAttempt.current;
+    clearTimeout(resetTimer.current);
+    let result: "copied" | "error" = "copied";
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      result = "error";
+    }
+    if (attempt !== copyAttempt.current) return;
+    setCopyState(result);
+    resetTimer.current = setTimeout(() => setCopyState("idle"), 1400);
   };
 
   return (
     <div className="code-shell">
-      <button className="code-copy" type="button" onClick={copy} aria-label="코드 복사">
-        {copied ? <Check size={14} /> : <Copy size={14} />}
-        <span>{copied ? "복사됨" : "복사"}</span>
+      <button className="code-copy" type="button" onClick={() => void copy()} aria-label="코드 복사">
+        {copyState === "copied" ? <Check size={14} /> : copyState === "error" ? <CircleAlert size={14} /> : <Copy size={14} />}
+        <span role="status">{copyState === "copied" ? "복사됨" : copyState === "error" ? "복사 실패" : "복사"}</span>
       </button>
       <pre>{children}</pre>
     </div>
@@ -39,18 +54,16 @@ function CodeBlock({ children }: { children?: ReactNode }) {
 function MarkdownImage({
   src,
   alt,
-  width,
 }: {
-  src?: string;
+  src?: string | Blob;
   alt?: string;
-  width: number;
 }) {
-  const [failed, setFailed] = useState(false);
-  if (!src) return null;
+  const [failedSrc, setFailedSrc] = useState("");
+  if (typeof src !== "string" || !src) return null;
 
   return (
-    <span className="markdown-image" style={{ width: `${width}%` }}>
-      {failed ? (
+    <span className="markdown-image">
+      {failedSrc === src ? (
         <a href={src} target="_blank" rel="noreferrer noopener" className="image-error">
           이미지 열기 <ExternalLink size={14} />
         </a>
@@ -60,7 +73,7 @@ function MarkdownImage({
           alt={alt || ""}
           loading="lazy"
           referrerPolicy="no-referrer"
-          onError={() => setFailed(true)}
+          onError={() => setFailedSrc(src)}
         />
       )}
       <span className="markdown-image-caption">
@@ -75,6 +88,20 @@ function safeUrlTransform(url: string): string {
   return defaultUrlTransform(url);
 }
 
+// Stable renderer types keep controls mounted while streamed Markdown changes.
+const markdownComponents: Components = {
+  pre: CodeBlock,
+  img: MarkdownImage,
+  a: function MarkdownLink({ href, children }) {
+    return (
+      <a href={href} target="_blank" rel="noreferrer noopener">
+        {Children.toArray(children)}
+        <ExternalLink className="inline-link-icon" size={12} />
+      </a>
+    );
+  },
+};
+
 export const MarkdownView = memo(function MarkdownView({
   content,
   imageWidth = 100,
@@ -84,27 +111,12 @@ export const MarkdownView = memo(function MarkdownView({
 }) {
   const normalizedImageWidth = Math.min(100, Math.max(30, imageWidth));
   return (
-    <div className="markdown-body">
+    <div className="markdown-body" style={{ "--markdown-image-width": `${normalizedImageWidth}%` } as CSSProperties}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
         urlTransform={safeUrlTransform}
-        components={{
-          pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
-          img: ({ src, alt }) => (
-            <MarkdownImage
-              src={typeof src === "string" ? src : undefined}
-              alt={alt}
-              width={normalizedImageWidth}
-            />
-          ),
-          a: ({ href, children }) => (
-            <a href={href} target="_blank" rel="noreferrer noopener">
-              {Children.toArray(children)}
-              <ExternalLink className="inline-link-icon" size={12} />
-            </a>
-          ),
-        }}
+        components={markdownComponents}
       >
         {content}
       </ReactMarkdown>

@@ -304,7 +304,7 @@ const MessageItem = memo(function MessageItem({
           <footer className="message-footer">
             <div className="message-actions">
               {message.content && (
-                <button type="button" onClick={() => void onCopy(message)} disabled={disabled}>
+                <button type="button" onClick={() => void onCopy(message)}>
                   {copied ? <Check size={13} /> : <Copy size={13} />}
                   {copied ? "복사됨" : "복사"}
                 </button>

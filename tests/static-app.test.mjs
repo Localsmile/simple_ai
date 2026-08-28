@@ -229,6 +229,28 @@ test("edits preset reasoning in the connection tab and conversation levels besid
   assert.doesNotMatch(composer, /setSettings|changeSettings|changeConversationSettings/);
 });
 
+test("keeps compact model controls above the input and separate from attachment and send actions", async () => {
+  const [page, styles] = await Promise.all([
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/globals.css", root), "utf8"),
+  ]);
+  const start = page.indexOf('className="composer-settings"');
+  const input = page.indexOf('className="composer"', start);
+  assert.ok(start >= 0 && input > start);
+  const settings = page.slice(start, input);
+  assert.match(settings, /composer-preset-select/);
+  assert.match(settings, /composer-reasoning/);
+  assert.match(settings, /vision-toggle/);
+  const toolbar = page.slice(page.indexOf('className="composer-toolbar"', input));
+  assert.doesNotMatch(toolbar, /composer-preset-select|composer-reasoning|vision-toggle/);
+  assert.match(toolbar, /aria-label="파일 첨부"/);
+  assert.match(toolbar, /aria-label="전송"/);
+  const mobile = styles.slice(styles.indexOf("@media (max-width: 560px)"));
+  assert.match(mobile, /\.composer-settings \{[^}]*grid-template-columns: minmax\(0, 1fr\) minmax\(0, 1fr\) auto/);
+  assert.match(mobile, /\.composer-preset-select \{ height: 36px; \}/);
+  assert.match(mobile, /\.composer-preset-select \{ width: 100%; min-width: 0;/);
+});
+
 test("supports a per-conversation markdown opening message", async () => {
   const [types, page, api, planner, settings, messageList] = await Promise.all([
     readFile(new URL("app/types.ts", root), "utf8"),
@@ -274,7 +296,7 @@ test("uses one shared image scale and renders user messages as markdown", async 
   assert.match(settings, /update\("markdownImageWidth"/);
   assert.match(page, /imageWidth=\{settings\.markdownImageWidth\}/);
   assert.match(markdown, /imageWidth = 100/);
-  assert.match(markdown, /width=\{normalizedImageWidth\}/);
+  assert.match(markdown, /"--markdown-image-width": `\$\{normalizedImageWidth\}%`/);
   assert.doesNotMatch(markdown, /setWidth|이미지 크기<\/span>/);
   assert.doesNotMatch(messageList, /<p className="user-text">/);
   assert.match(messageList, /message\.content && <MarkdownView content=\{message\.content\} imageWidth=\{imageWidth\}/);
@@ -406,7 +428,7 @@ test("uses concise UI labels, a visible image toggle and distinct MCP registrati
   ]);
   assert.doesNotMatch([page, settings, reasoning, mcp].join("\n"), /하십시오|합니다|습니다|됩니다|local-note/);
   assert.match(page, /aria-label="이미지 입력" aria-pressed=\{activeProvider\.vision\}/);
-  assert.match(page, /이미지 입력 <strong>/);
+  assert.match(page, /이미지 <strong>/);
   assert.match(page, /vision: !activeProvider\.vision/);
   assert.doesNotMatch(styles, /vision-toggle[^}]*display: none/);
   assert.doesNotMatch(mcp, /mcpToolLimit|요청당 도구 수 한도/);
