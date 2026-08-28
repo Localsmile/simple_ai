@@ -1,6 +1,7 @@
 import type { AppSettings, Conversation, ProviderPreset, McpServerConfig, McpAuthType } from "../types";
 import { DEFAULT_PROVIDER_PRESET, DEFAULT_SETTINGS } from "../types";
 import { configuredReasoningLevels, normalizeReasoning, resolvePresetReasoning } from "./reasoning";
+import { normalizeConnectionMode } from "./connection";
 
 const DB_NAME = "simple-ai";
 const DB_VERSION = 1;
@@ -97,7 +98,7 @@ function normalizePresets(saved: Partial<AppSettings> & LegacySettings): Provide
       id: typeof preset.id === "string" && preset.id ? preset.id : `preset-${index + 1}`,
       name: typeof preset.name === "string" && preset.name ? preset.name : `연결 ${index + 1}`,
       baseUrl: typeof preset.baseUrl === "string" ? preset.baseUrl : "",
-      connectionMode: preset.connectionMode === "nvidia-proxy" ? "nvidia-proxy" : "direct",
+      connectionMode: normalizeConnectionMode(preset.connectionMode),
       apiKey: "",
       model: typeof preset.model === "string" ? preset.model : "",
       vision: Boolean(preset.vision),

@@ -94,7 +94,7 @@ export interface ProviderPreset {
   id: string;
   name: string;
   baseUrl: string;
-  connectionMode: "direct" | "nvidia-proxy";
+  connectionMode: "direct" | "cors-proxy";
   apiKey: string;
   model: string;
   vision: boolean;

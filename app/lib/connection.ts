@@ -1,28 +1,36 @@
 import type { ProviderPreset } from "../types";
+import { CORS_PROXY_URL, parsePublicChatTarget } from "../../shared/proxy-target";
+export { CORS_PROXY_URL, UPSTREAM_HEADER } from "../../shared/proxy-target";
 
-export const NVIDIA_PROXY_URL = "https://simple-ai-nvidia-proxy.localai0301.workers.dev/v1/chat/completions";
-
-export function resolveChatUrl(baseUrl: string): string {
-  const normalized = baseUrl.trim().replace(/\/+$/, "");
-  if (/\/chat\/completions$/i.test(normalized)) return normalized;
-  return `${normalized}/chat/completions`;
+export function normalizeConnectionMode(value: unknown): ProviderPreset["connectionMode"] {
+  return value === "cors-proxy" || value === "nvidia-proxy" ? "cors-proxy" : "direct";
 }
 
-export function supportsNvidiaProxy(baseUrl: string): boolean {
+export function resolveChatUrl(baseUrl: string): string {
+  const normalized = baseUrl.trim();
   try {
-    const url = new URL(resolveChatUrl(baseUrl));
-    return url.origin === "https://integrate.api.nvidia.com"
-      && url.pathname === "/v1/chat/completions"
-      && !url.username && !url.password && !url.search && !url.hash;
+    const url = new URL(normalized);
+    const path = url.pathname.replace(/\/+$/, "");
+    url.pathname = /\/chat\/completions$/i.test(path) ? path : `${path}/chat/completions`;
+    return url.href;
+  } catch { /* Preserve the direct-connection validation path for incomplete input. */ }
+  const fallback = normalized.replace(/\/+$/, "");
+  if (/\/chat\/completions$/i.test(fallback)) return fallback;
+  return `${fallback}/chat/completions`;
+}
+
+export function supportsCorsProxy(baseUrl: string): boolean {
+  try {
+    parsePublicChatTarget(resolveChatUrl(baseUrl));
+    return true;
   } catch {
     return false;
   }
 }
 
 export function resolveCompletionUrl(provider: Pick<ProviderPreset, "baseUrl" | "connectionMode">): string {
-  if (provider.connectionMode !== "nvidia-proxy") return resolveChatUrl(provider.baseUrl);
-  if (!supportsNvidiaProxy(provider.baseUrl)) {
-    throw new Error("Cloudflare 중계는 NVIDIA integrate.api.nvidia.com/v1 전용");
-  }
-  return NVIDIA_PROXY_URL;
+  const target = resolveChatUrl(provider.baseUrl);
+  if (normalizeConnectionMode(provider.connectionMode) === "direct") return target;
+  parsePublicChatTarget(target);
+  return CORS_PROXY_URL;
 }

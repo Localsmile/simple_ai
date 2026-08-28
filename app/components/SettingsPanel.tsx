@@ -18,7 +18,7 @@ import { DEFAULT_REASONING, getActiveProvider } from "../types";
 import { ReasoningControls } from "./ReasoningControls";
 import { McpSettings } from "./McpSettings";
 import { MarkdownView } from "./MarkdownView";
-import { supportsNvidiaProxy } from "../lib/connection";
+import { supportsCorsProxy } from "../lib/connection";
 
 type SettingsTab = "connection" | "generation" | "mcp";
 
@@ -255,18 +255,18 @@ export function SettingsPanel({
                 <select
                   value={activeProvider.connectionMode}
                   onChange={(event) => updateProvider("connectionMode",
-                    event.target.value === "nvidia-proxy" ? "nvidia-proxy" : "direct")}
+                    event.target.value === "cors-proxy" ? "cors-proxy" : "direct")}
                 >
                   <option value="direct">직접 연결</option>
-                  <option value="nvidia-proxy" disabled={!supportsNvidiaProxy(activeProvider.baseUrl)}>
-                    Cloudflare 중계 · NVIDIA
+                  <option value="cors-proxy">
+                    CORS 오류 시 사용
                   </option>
                 </select>
-                {activeProvider.connectionMode === "nvidia-proxy" && (
+                {activeProvider.connectionMode === "cors-proxy" && (
                   <small>
-                    {supportsNvidiaProxy(activeProvider.baseUrl)
+                    {supportsCorsProxy(activeProvider.baseUrl)
                       ? "API 키·메시지: Cloudflare 경유 · 중계 서버 저장 없음"
-                      : "중계 미지원 엔드포인트 · 직접 연결 필요"}
+                      : "공개 HTTPS 엔드포인트 필요 · 로컬·IP 주소 중계 불가"}
                   </small>
                 )}
               </label>

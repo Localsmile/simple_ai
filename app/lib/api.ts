@@ -7,7 +7,7 @@ import type {
   TokenUsage,
 } from "../types";
 import { mergeRequestOptions, reasoningOptions } from "./reasoning";
-import { resolveCompletionUrl } from "./connection";
+import { normalizeConnectionMode, resolveChatUrl, resolveCompletionUrl, UPSTREAM_HEADER } from "./connection";
 export { resolveChatUrl } from "./connection";
 
 export type ApiMessage = Record<string, unknown>;
@@ -332,9 +332,11 @@ export async function requestCompletion({
   onReasoningDelta,
 }: CompletionOptions): Promise<CompletionResult> {
   const requestUrl = resolveCompletionUrl(provider);
+  const useProxy = normalizeConnectionMode(provider.connectionMode) === "cors-proxy";
   const serializedBody = serializeCompletionRequest(settings, provider, messages, tools, reasoningSettings);
 
   const headers = new Headers({ "Content-Type": "application/json" });
+  if (useProxy) headers.set(UPSTREAM_HEADER, resolveChatUrl(provider.baseUrl));
   if (provider.apiKey.trim()) {
     headers.set("Authorization", `Bearer ${provider.apiKey.trim()}`);
   }
@@ -346,12 +348,12 @@ export async function requestCompletion({
       headers,
       body: serializedBody,
       signal,
-      ...(provider.connectionMode === "nvidia-proxy" ? { credentials: "omit" as const, redirect: "error" as const } : {}),
+      ...(useProxy ? { credentials: "omit" as const, redirect: "error" as const } : {}),
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;
     throw new Error(
-      provider.connectionMode === "nvidia-proxy"
+      useProxy
         ? "Cloudflare 중계 연결 실패 · 네트워크 / 접근 허용 출처 확인"
         : "API 연결 실패 · 엔드포인트 / 네트워크 / CORS 오류",
     );
