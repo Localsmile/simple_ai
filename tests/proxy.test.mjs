@@ -241,7 +241,8 @@ test("DNS errors and oversized responses fail closed; rate limiting runs before 
 test("direct connections never send the proxy target header", async () => {
   let captured;
   const { requestCompletion } = loadTs("app/lib/api.ts", { fetch: async (url, init) => {
-    captured = { url, init }; return Response.json({ choices: [] });
+    captured = { url, init };
+    return Response.json({ choices: [{ message: { content: "ok" }, finish_reason: "stop" }] });
   } });
   await requestCompletion({ settings: DEFAULT_SETTINGS, provider: { ...provider, connectionMode: "direct" }, messages: [] });
   assert.equal(captured.url, upstreamUrl);

@@ -1068,6 +1068,16 @@ export default function Home() {
               toolEvents,
             }));
           },
+          onRetry: () => {
+            accumulated = roundBase;
+            roundReasoning = "";
+            updateAssistant(assistantMessage.id, (message) => ({
+              ...message,
+              content: roundBase,
+              reasoning: reasoningRoundBase || undefined,
+              toolEvents,
+            }));
+          },
         });
         accumulated = roundBase + result.content;
         roundReasoning = result.reasoning || roundReasoning;

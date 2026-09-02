@@ -28,6 +28,15 @@ export interface CompletionResult {
   finishReason?: string;
   toolCalls: OpenAIToolCall[];
   rawAssistantMessage: Record<string, unknown>;
+  diagnostics: CompletionDiagnostics;
+}
+
+export interface CompletionDiagnostics {
+  id?: string;
+  model?: string;
+  provider?: string;
+  receivedEvents?: number;
+  malformedEvents?: number;
 }
 
 export interface CompletionOptions {
@@ -39,6 +48,7 @@ export interface CompletionOptions {
   signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onReasoningDelta?: (delta: string) => void;
+  onRetry?: () => void;
 }
 
 interface RawUsage {
@@ -58,6 +68,7 @@ interface RawUsage {
 interface RawContentPart {
   text?: string;
   content?: string;
+  output_text?: string;
 }
 
 interface RawMessage {
@@ -76,19 +87,28 @@ interface ToolCallDelta {
 }
 
 interface RawCompletionPayload {
+  id?: string;
+  model?: string;
   choices?: Array<{
     message?: RawMessage;
     finish_reason?: string | null;
+    text?: string;
     delta?: {
-      content?: string;
+      content?: string | RawContentPart[];
+      output_text?: string;
       reasoning?: string;
       reasoning_content?: string;
       reasoning_details?: Record<string, unknown>[];
       tool_calls?: ToolCallDelta[];
+      finish_reason?: string | null;
     };
   }>;
   usage?: RawUsage;
   error?: { message?: string } | string;
+  openrouter_metadata?: {
+    endpoints?: { available?: Array<{ provider?: string; selected?: boolean }> };
+    attempts?: Array<{ provider?: string; status?: number }>;
+  };
 }
 
 type ReasoningField = "reasoning" | "reasoning_content";
@@ -108,6 +128,28 @@ function readReasoning(
     if (detail?.type === "reasoning.summary" && typeof detail.summary === "string") return detail.summary;
     return "";
   }).join("") };
+}
+
+function readContent(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (!Array.isArray(value)) return "";
+  return value.map((part) => {
+    if (!part || typeof part !== "object") return "";
+    const item = part as RawContentPart;
+    return typeof item.text === "string"
+      ? item.text
+      : typeof item.content === "string"
+        ? item.content
+        : typeof item.output_text === "string"
+          ? item.output_text
+          : "";
+  }).join("");
+}
+
+function selectedProvider(payload: RawCompletionPayload): string | undefined {
+  const metadata = payload.openrouter_metadata;
+  return metadata?.endpoints?.available?.find((endpoint) => endpoint.selected)?.provider
+    || [...(metadata?.attempts || [])].reverse().find((attempt) => attempt.status === 200)?.provider;
 }
 
 export class ApiRequestError extends Error {
@@ -176,7 +218,11 @@ export function buildApiMessages(
     if (message.error) continue;
 
     if (message.role === "assistant") {
-      apiMessages.push({ role: "assistant", content: message.content });
+      // A reasoning-only or interrupted response is not a valid assistant turn.
+      // Re-sending an empty turn can make some chat templates produce another empty answer.
+      if (message.content.trim()) {
+        apiMessages.push({ role: "assistant", content: message.content });
+      }
       continue;
     }
 
@@ -255,7 +301,9 @@ export function serializeCompletionRequest(
   messages: ApiMessage[],
   tools?: ApiTool[],
   reasoning: ReasoningSettings = provider.reasoning,
+  streamOverride?: boolean,
 ): string {
+  const stream = streamOverride ?? settings.stream;
   let extraBody: Record<string, unknown> = {};
   if (provider.extraBody.trim()) {
     let parsed: unknown;
@@ -275,7 +323,7 @@ export function serializeCompletionRequest(
     messages,
     temperature: settings.temperature,
     max_tokens: settings.maxTokens,
-    stream: settings.stream,
+    stream,
   };
   mergeRequestOptions(body, extraBody);
   const overrides = reasoningOptions(reasoning);
@@ -288,7 +336,9 @@ export function serializeCompletionRequest(
   }
   mergeRequestOptions(body, overrides);
 
-  if (settings.stream) body.stream_options = { include_usage: true };
+  if (streamOverride !== undefined) body.stream = stream;
+  if (stream) body.stream_options = { include_usage: true };
+  else if (streamOverride !== undefined) delete body.stream_options;
   if (tools?.length) {
     body.tools = tools;
     body.tool_choice = "auto";
@@ -296,15 +346,19 @@ export function serializeCompletionRequest(
   return JSON.stringify(body);
 }
 
-function parseJsonCompletion(payload: RawCompletionPayload): CompletionResult {
+function parseJsonCompletion(
+  payload: RawCompletionPayload,
+  response: Response,
+): CompletionResult {
+  if (payload.error) {
+    const message = typeof payload.error === "string"
+      ? payload.error
+      : payload.error.message || JSON.stringify(payload.error);
+    throw new Error(`API 응답 오류: ${message}`);
+  }
   const message = payload.choices?.[0]?.message || {};
   const reasoning = readReasoning(message);
-  const content =
-    typeof message.content === "string"
-      ? message.content
-      : Array.isArray(message.content)
-        ? message.content.map((part) => part?.text || part?.content || "").join("")
-        : "";
+  const content = readContent(message.content) || readContent(payload.choices?.[0]?.text);
   return {
     content,
     reasoning: reasoning.content || undefined,
@@ -318,10 +372,15 @@ function parseJsonCompletion(payload: RawCompletionPayload): CompletionResult {
       ...(Array.isArray(message.reasoning_details) ? { reasoning_details: message.reasoning_details } : {}),
       ...(message.tool_calls ? { tool_calls: message.tool_calls } : {}),
     },
+    diagnostics: {
+      id: payload.id || response.headers.get("x-generation-id") || response.headers.get("x-request-id") || undefined,
+      model: payload.model,
+      provider: selectedProvider(payload),
+    },
   };
 }
 
-export async function requestCompletion({
+async function requestCompletionOnce({
   settings,
   provider,
   reasoning: reasoningSettings,
@@ -330,10 +389,13 @@ export async function requestCompletion({
   signal,
   onDelta,
   onReasoningDelta,
-}: CompletionOptions): Promise<CompletionResult> {
+}: CompletionOptions, streamOverride?: boolean): Promise<CompletionResult> {
+  const requestStream = streamOverride ?? settings.stream;
   const requestUrl = resolveCompletionUrl(provider);
   const useProxy = normalizeConnectionMode(provider.connectionMode) === "cors-proxy";
-  const serializedBody = serializeCompletionRequest(settings, provider, messages, tools, reasoningSettings);
+  const serializedBody = serializeCompletionRequest(
+    settings, provider, messages, tools, reasoningSettings, streamOverride,
+  );
 
   const headers = new Headers({ "Content-Type": "application/json" });
   if (useProxy) headers.set(UPSTREAM_HEADER, resolveChatUrl(provider.baseUrl));
@@ -365,8 +427,14 @@ export async function requestCompletion({
   }
 
   const contentType = response.headers.get("content-type") || "";
-  if (!settings.stream || !contentType.includes("text/event-stream")) {
-    return parseJsonCompletion((await response.json()) as RawCompletionPayload);
+  if (!requestStream || !contentType.includes("text/event-stream")) {
+    let payload: RawCompletionPayload;
+    try {
+      payload = (await response.json()) as RawCompletionPayload;
+    } catch {
+      throw new Error("API 응답 형식 오류 · JSON 또는 SSE 필요");
+    }
+    return parseJsonCompletion(payload, response);
   }
 
   if (!response.body) throw new Error("API 응답 스트림 없음");
@@ -380,6 +448,11 @@ export async function requestCompletion({
   let reasoningField: ReasoningField | undefined;
   let usage: TokenUsage | undefined;
   let finishReason: string | undefined;
+  let responseId = response.headers.get("x-generation-id") || response.headers.get("x-request-id") || undefined;
+  let responseModel: string | undefined;
+  let responseProvider: string | undefined;
+  let receivedEvents = 0;
+  let malformedEvents = 0;
   const toolCalls: OpenAIToolCall[] = [];
   const reasoningDetails: Record<string, unknown>[] = [];
 
@@ -393,8 +466,11 @@ export async function requestCompletion({
     try {
       payload = JSON.parse(data) as RawCompletionPayload;
     } catch {
+      malformedEvents += 1;
       return;
     }
+
+    receivedEvents += 1;
 
     if (payload.error) {
       const message =
@@ -406,7 +482,12 @@ export async function requestCompletion({
 
     const choice = payload.choices?.[0];
     const delta = choice?.delta || {};
-    if (choice?.finish_reason) finishReason = choice.finish_reason;
+    responseId = payload.id || responseId;
+    responseModel = payload.model || responseModel;
+    responseProvider = selectedProvider(payload) || responseProvider;
+    if (choice?.finish_reason || delta.finish_reason) {
+      finishReason = choice?.finish_reason || delta.finish_reason || undefined;
+    }
     const reasoningDelta = readReasoning(delta);
     if (reasoningDelta.content) {
       reasoning += reasoningDelta.content;
@@ -416,7 +497,7 @@ export async function requestCompletion({
     }
     // Keep the provider's signed/encrypted sequence intact for the next tool round.
     if (Array.isArray(delta.reasoning_details)) reasoningDetails.push(...delta.reasoning_details);
-    const text = typeof delta.content === "string" ? delta.content : "";
+    const text = readContent(delta.content) || readContent(delta.output_text) || readContent(choice?.text);
     if (text) {
       content += text;
       onDelta?.(text);
@@ -448,5 +529,54 @@ export async function requestCompletion({
       ...(reasoningDetails.length ? { reasoning_details: reasoningDetails } : {}),
       ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
     },
+    diagnostics: {
+      id: responseId,
+      model: responseModel,
+      provider: responseProvider,
+      receivedEvents,
+      malformedEvents,
+    },
   };
+}
+
+function isUsableCompletion(result: CompletionResult): boolean {
+  if (result.content.trim() || result.toolCalls.length) return true;
+  return result.finishReason === "content_filter";
+}
+
+function isRetryableEmptyCompletion(result: CompletionResult): boolean {
+  if (result.reasoning?.trim() || (result.usage?.output || 0) > 0) return false;
+  return !result.finishReason || result.finishReason === "stop" || result.finishReason === "error";
+}
+
+function describeEmptyCompletion(result: CompletionResult): string {
+  const parts = [
+    result.diagnostics.id ? `ID ${result.diagnostics.id}` : "",
+    result.diagnostics.provider ? `공급자 ${result.diagnostics.provider}` : "",
+    result.finishReason ? `종료 ${result.finishReason}` : "종료 사유 없음",
+    result.diagnostics.malformedEvents ? `손상 이벤트 ${result.diagnostics.malformedEvents}` : "",
+  ].filter(Boolean);
+  return parts.join(" · ");
+}
+
+export async function requestCompletion(options: CompletionOptions): Promise<CompletionResult> {
+  const first = await requestCompletionOnce(options);
+  if (isUsableCompletion(first)) return first;
+  if (!isRetryableEmptyCompletion(first)) {
+    const kind = first.reasoning?.trim() ? "thinking만 수신" : "본문 없음";
+    const diagnostic = describeEmptyCompletion(first);
+    throw new Error(`API 응답 본문 없음 · ${kind}${diagnostic ? ` · ${diagnostic}` : ""}`);
+  }
+
+  options.onRetry?.();
+  const second = await requestCompletionOnce({
+    ...options,
+    onDelta: undefined,
+    onReasoningDelta: undefined,
+    onRetry: undefined,
+  }, false);
+  if (isUsableCompletion(second)) return second;
+
+  const diagnostic = describeEmptyCompletion(second) || describeEmptyCompletion(first);
+  throw new Error(`API 빈 응답 · 자동 재시도 실패${diagnostic ? ` · ${diagnostic}` : ""}`);
 }

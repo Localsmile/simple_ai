@@ -53,6 +53,112 @@ test("per-request reasoning overrides the preset without mutating it", async () 
   assert.equal(provider.reasoning.level, "high");
 });
 
+test("empty streamed completions retry once as JSON without adding nonstandard headers", async () => {
+  const requests = [];
+  let retryCount = 0;
+  const { requestCompletion } = loadTs("app/lib/api.ts", {
+    fetch: async (_url, init) => {
+      requests.push({ body: JSON.parse(init.body), headers: init.headers });
+      if (requests.length === 1) {
+        return new Response([
+          `data: ${JSON.stringify({ id: "gen-empty", model: "z-ai/glm-5.3-flash", choices: [{ delta: {}, finish_reason: null }] })}\n\n`,
+          "data: [DONE]\n\n",
+        ].join(""), { headers: { "Content-Type": "text/event-stream" } });
+      }
+      return new Response(JSON.stringify({
+        id: "gen-retry",
+        model: "z-ai/glm-5.3-flash",
+        choices: [{ message: { content: "recovered" }, finish_reason: "stop" }],
+      }), { headers: { "Content-Type": "application/json" } });
+    },
+  });
+  const provider = {
+    ...DEFAULT_PROVIDER_PRESET,
+    baseUrl: "https://openrouter.ai/api/v1",
+  };
+  const result = await requestCompletion({
+    settings: { ...DEFAULT_SETTINGS, stream: true }, provider, messages: [],
+    onRetry: () => { retryCount += 1; },
+  });
+  assert.equal(result.content, "recovered");
+  assert.equal(retryCount, 1);
+  assert.deepEqual(requests.map((request) => request.body.stream), [true, false]);
+  assert.equal(requests[1].body.stream_options, undefined);
+  assert.equal(requests[0].headers.has("X-OpenRouter-Metadata"), false);
+});
+
+test("reasoning-only completions fail visibly without doubling billed output", async () => {
+  let call = 0;
+  let reasoning = "";
+  let retryCount = 0;
+  const { requestCompletion } = loadTs("app/lib/api.ts", {
+    fetch: async () => {
+      call += 1;
+      return new Response([
+        `data: ${JSON.stringify({ choices: [{ delta: { reasoning: "thinking" }, finish_reason: "stop" }], usage: { completion_tokens: 8 } })}\n\n`,
+        "data: [DONE]\n\n",
+      ].join(""), { headers: { "Content-Type": "text/event-stream" } });
+    },
+  });
+  await assert.rejects(requestCompletion({
+      settings: { ...DEFAULT_SETTINGS, stream: true }, provider: DEFAULT_PROVIDER_PRESET, messages: [],
+      onReasoningDelta: (delta) => { reasoning += delta; },
+      onRetry: () => { retryCount += 1; },
+    }), /API 응답 본문 없음 · thinking만 수신 · 종료 stop/);
+  assert.equal(reasoning, "thinking");
+  assert.equal(retryCount, 0);
+  assert.equal(call, 1);
+});
+
+test("two empty completions become a diagnostic error instead of a saved blank answer", async () => {
+  let call = 0;
+  const { requestCompletion } = loadTs("app/lib/api.ts", {
+    fetch: async () => {
+      call += 1;
+      return new Response(JSON.stringify({
+        id: `gen-empty-${call}`,
+        choices: [{ message: { content: "" }, finish_reason: null }],
+        openrouter_metadata: {
+          endpoints: { available: [{ provider: "Mock Provider", selected: true }] },
+        },
+      }), { headers: { "Content-Type": "application/json" } });
+    },
+  });
+  await assert.rejects(
+    requestCompletion({ settings: DEFAULT_SETTINGS, provider: DEFAULT_PROVIDER_PRESET, messages: [] }),
+    /API 빈 응답 · 자동 재시도 실패 · ID gen-empty-2 · 공급자 Mock Provider · 종료 사유 없음/,
+  );
+  assert.equal(call, 2);
+});
+
+test("stream parsing accepts content parts and provider-style delta finish reasons", async () => {
+  const { requestCompletion } = loadTs("app/lib/api.ts", {
+    fetch: async () => new Response([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: [{ type: "output_text", text: "part" }] } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: { finish_reason: "stop" } }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join(""), { headers: { "Content-Type": "text/event-stream" } }),
+  });
+  const result = await requestCompletion({
+    settings: { ...DEFAULT_SETTINGS, stream: true }, provider: DEFAULT_PROVIDER_PRESET, messages: [],
+  });
+  assert.equal(result.content, "part");
+  assert.equal(result.finishReason, "stop");
+});
+
+test("API history excludes empty assistant turns but keeps user and answered turns", () => {
+  const { buildApiMessages } = loadTs("app/lib/api.ts");
+  const messages = [
+    { id: "user-1", role: "user", content: "question", createdAt: 1 },
+    { id: "assistant-empty", role: "assistant", content: "", reasoning: "thinking", createdAt: 2 },
+    { id: "assistant-answer", role: "assistant", content: "answer", createdAt: 3 },
+  ];
+  assert.deepEqual(buildApiMessages(messages, "", false), [
+    { role: "user", content: "question" },
+    { role: "assistant", content: "answer" },
+  ]);
+});
+
 test("preset reasoning keeps selectable levels, defaults and conversation overrides separate", () => {
   const { configuredReasoningLevels, resolvePresetReasoning } = loadTs("app/lib/reasoning.ts");
   const preset = { reasoning: { ...DEFAULT_REASONING, format: "thinking", level: "high" },
