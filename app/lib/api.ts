@@ -34,7 +34,6 @@ export interface CompletionResult {
 export interface CompletionDiagnostics {
   id?: string;
   model?: string;
-  provider?: string;
   requestBytes?: number;
   receivedEvents?: number;
   malformedEvents?: number;
@@ -90,7 +89,6 @@ interface ToolCallDelta {
 interface RawCompletionPayload {
   id?: string;
   model?: string;
-  provider?: string;
   choices?: Array<{
     message?: RawMessage;
     finish_reason?: string | null;
@@ -107,10 +105,6 @@ interface RawCompletionPayload {
   }>;
   usage?: RawUsage;
   error?: { message?: string } | string;
-  openrouter_metadata?: {
-    endpoints?: { available?: Array<{ provider?: string; selected?: boolean }> };
-    attempts?: Array<{ provider?: string; status?: number }>;
-  };
 }
 
 type ReasoningField = "reasoning" | "reasoning_content";
@@ -146,13 +140,6 @@ function readContent(value: unknown): string {
           ? item.output_text
           : "";
   }).join("");
-}
-
-function selectedProvider(payload: RawCompletionPayload): string | undefined {
-  const metadata = payload.openrouter_metadata;
-  return payload.provider
-    || metadata?.endpoints?.available?.find((endpoint) => endpoint.selected)?.provider
-    || [...(metadata?.attempts || [])].reverse().find((attempt) => attempt.status === 200)?.provider;
 }
 
 export class ApiRequestError extends Error {
@@ -379,7 +366,6 @@ function parseJsonCompletion(
     diagnostics: {
       id: payload.id || response.headers.get("x-generation-id") || response.headers.get("x-request-id") || undefined,
       model: payload.model,
-      provider: selectedProvider(payload),
       requestBytes,
     },
   };
@@ -455,7 +441,6 @@ async function requestCompletionOnce({
   let finishReason: string | undefined;
   let responseId = response.headers.get("x-generation-id") || response.headers.get("x-request-id") || undefined;
   let responseModel: string | undefined;
-  let responseProvider: string | undefined;
   let receivedEvents = 0;
   let malformedEvents = 0;
   const toolCalls: OpenAIToolCall[] = [];
@@ -489,7 +474,6 @@ async function requestCompletionOnce({
     const delta = choice?.delta || {};
     responseId = payload.id || responseId;
     responseModel = payload.model || responseModel;
-    responseProvider = selectedProvider(payload) || responseProvider;
     if (choice?.finish_reason || delta.finish_reason) {
       finishReason = choice?.finish_reason || delta.finish_reason || undefined;
     }
@@ -537,7 +521,6 @@ async function requestCompletionOnce({
     diagnostics: {
       id: responseId,
       model: responseModel,
-      provider: responseProvider,
       requestBytes,
       receivedEvents,
       malformedEvents,
@@ -555,45 +538,46 @@ function isRetryableEmptyCompletion(result: CompletionResult): boolean {
   return !result.finishReason || result.finishReason === "stop" || result.finishReason === "error";
 }
 
-function formatDiagnosticCount(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
-  return String(value);
-}
-
-function describeEmptyCompletion(label: string, result: CompletionResult): string {
-  const parts = [
-    label,
-    result.diagnostics.provider || "공급자 미확인",
-    result.finishReason ? `종료 ${result.finishReason}` : "종료 사유 없음",
-    result.usage ? `IN ${formatDiagnosticCount(result.usage.input)}` : "",
-    result.usage ? `OUT ${formatDiagnosticCount(result.usage.output)}` : "",
-    result.diagnostics.id ? `ID ${result.diagnostics.id}` : "",
-    result.diagnostics.malformedEvents ? `손상 이벤트 ${result.diagnostics.malformedEvents}` : "",
-  ].filter(Boolean);
-  return parts.join(" · ");
-}
-
-function describeRequest(options: CompletionOptions, result: CompletionResult): string {
-  const bytes = result.diagnostics.requestBytes;
+function logEmptyCompletion(
+  options: CompletionOptions,
+  first: CompletionResult,
+  second?: CompletionResult,
+): void {
   const reasoning = options.reasoning || options.provider.reasoning;
-  return [
-    `요청 ${options.messages.length}개 메시지`,
-    `${options.tools?.length || 0}개 도구`,
-    bytes ? `${formatDiagnosticCount(bytes)}B` : "",
-    `MAX ${formatDiagnosticCount(options.settings.maxTokens)}`,
-    `추론 ${reasoning.format}/${reasoning.level}`,
-  ].filter(Boolean).join(" · ");
+  const summarize = (result: CompletionResult) => ({
+    id: result.diagnostics.id,
+    model: result.diagnostics.model,
+    finishReason: result.finishReason,
+    usage: result.usage,
+    requestBytes: result.diagnostics.requestBytes,
+    receivedEvents: result.diagnostics.receivedEvents,
+    malformedEvents: result.diagnostics.malformedEvents,
+    contentLength: result.content.length,
+    reasoningLength: result.reasoning?.length || 0,
+    toolCallCount: result.toolCalls.length,
+  });
+
+  console.warn("[Simple AI] Completion without usable content", {
+    request: {
+      model: options.provider.model,
+      messageCount: options.messages.length,
+      toolCount: options.tools?.length || 0,
+      maxTokens: options.settings.maxTokens,
+      stream: options.settings.stream,
+      reasoning: { format: reasoning.format, level: reasoning.level },
+    },
+    first: summarize(first),
+    ...(second ? { second: summarize(second) } : {}),
+  });
 }
 
 export async function requestCompletion(options: CompletionOptions): Promise<CompletionResult> {
   const first = await requestCompletionOnce(options);
   if (isUsableCompletion(first)) return first;
   if (!isRetryableEmptyCompletion(first)) {
+    logEmptyCompletion(options, first);
     const kind = first.reasoning?.trim() ? "thinking만 수신" : "본문 없음";
-    throw new Error(
-      `API 응답 본문 없음 · ${kind} · ${describeEmptyCompletion("1차", first)} · ${describeRequest(options, first)}`,
-    );
+    throw new Error(`API 응답 본문 없음 · ${kind}`);
   }
 
   options.onRetry?.();
@@ -605,10 +589,6 @@ export async function requestCompletion(options: CompletionOptions): Promise<Com
   }, false);
   if (isUsableCompletion(second)) return second;
 
-  throw new Error([
-    "API 빈 응답",
-    describeEmptyCompletion("1차", first),
-    describeEmptyCompletion("2차", second),
-    describeRequest(options, second),
-  ].join(" · "));
+  logEmptyCompletion(options, first, second);
+  throw new Error("API 빈 응답 · 자동 재시도 실패");
 }

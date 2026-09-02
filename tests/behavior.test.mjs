@@ -61,20 +61,20 @@ test("empty streamed completions retry once as JSON without adding nonstandard h
       requests.push({ body: JSON.parse(init.body), headers: init.headers });
       if (requests.length === 1) {
         return new Response([
-          `data: ${JSON.stringify({ id: "gen-empty", model: "z-ai/glm-5.3-flash", choices: [{ delta: {}, finish_reason: null }] })}\n\n`,
+          `data: ${JSON.stringify({ id: "gen-empty", model: "custom/model", choices: [{ delta: {}, finish_reason: null }] })}\n\n`,
           "data: [DONE]\n\n",
         ].join(""), { headers: { "Content-Type": "text/event-stream" } });
       }
       return new Response(JSON.stringify({
         id: "gen-retry",
-        model: "z-ai/glm-5.3-flash",
+        model: "custom/model",
         choices: [{ message: { content: "recovered" }, finish_reason: "stop" }],
       }), { headers: { "Content-Type": "application/json" } });
     },
   });
   const provider = {
     ...DEFAULT_PROVIDER_PRESET,
-    baseUrl: "https://openrouter.ai/api/v1",
+    baseUrl: "https://api.example.com/v1",
   };
   const result = await requestCompletion({
     settings: { ...DEFAULT_SETTINGS, stream: true }, provider, messages: [],
@@ -84,14 +84,16 @@ test("empty streamed completions retry once as JSON without adding nonstandard h
   assert.equal(retryCount, 1);
   assert.deepEqual(requests.map((request) => request.body.stream), [true, false]);
   assert.equal(requests[1].body.stream_options, undefined);
-  assert.equal(requests[0].headers.has("X-OpenRouter-Metadata"), false);
+  assert.deepEqual([...requests[0].headers.keys()], ["content-type"]);
 });
 
 test("reasoning-only completions fail visibly without doubling billed output", async () => {
   let call = 0;
   let reasoning = "";
   let retryCount = 0;
+  const warnings = [];
   const { requestCompletion } = loadTs("app/lib/api.ts", {
+    console: { warn: (...args) => warnings.push(args) },
     fetch: async () => {
       call += 1;
       return new Response([
@@ -104,29 +106,40 @@ test("reasoning-only completions fail visibly without doubling billed output", a
       settings: { ...DEFAULT_SETTINGS, stream: true }, provider: DEFAULT_PROVIDER_PRESET, messages: [],
       onReasoningDelta: (delta) => { reasoning += delta; },
       onRetry: () => { retryCount += 1; },
-    }), /API 응답 본문 없음 · thinking만 수신 · 1차 · 공급자 미확인 · 종료 stop · IN 0 · OUT 8 · 요청 0개 메시지 · 0개 도구/);
+    }), /API 응답 본문 없음 · thinking만 수신/);
   assert.equal(reasoning, "thinking");
   assert.equal(retryCount, 0);
   assert.equal(call, 1);
+  assert.equal(warnings.length, 1);
 });
 
 test("two empty completions become a diagnostic error instead of a saved blank answer", async () => {
   let call = 0;
+  const warnings = [];
   const { requestCompletion } = loadTs("app/lib/api.ts", {
+    console: { warn: (...args) => warnings.push(args) },
     fetch: async () => {
       call += 1;
       return new Response(JSON.stringify({
         id: `gen-empty-${call}`,
-        provider: `Mock Provider ${call}`,
         choices: [{ message: { content: "" }, finish_reason: null }],
       }), { headers: { "Content-Type": "application/json" } });
     },
   });
   await assert.rejects(
-    requestCompletion({ settings: DEFAULT_SETTINGS, provider: DEFAULT_PROVIDER_PRESET, messages: [] }),
-    /API 빈 응답 · 1차 · Mock Provider 1 · 종료 사유 없음 · ID gen-empty-1 · 2차 · Mock Provider 2 · 종료 사유 없음 · ID gen-empty-2 · 요청 0개 메시지 · 0개 도구/,
+    requestCompletion({
+      settings: DEFAULT_SETTINGS,
+      provider: { ...DEFAULT_PROVIDER_PRESET, apiKey: "private-key" },
+      messages: [{ role: "user", content: "private prompt" }],
+    }),
+    /API 빈 응답 · 자동 재시도 실패/,
   );
   assert.equal(call, 2);
+  assert.equal(warnings.length, 1);
+  const diagnostic = JSON.stringify(warnings);
+  assert.match(diagnostic, /gen-empty-1/);
+  assert.match(diagnostic, /gen-empty-2/);
+  assert.doesNotMatch(diagnostic, /private-key|private prompt/);
 });
 
 test("stream parsing accepts content parts and provider-style delta finish reasons", async () => {
