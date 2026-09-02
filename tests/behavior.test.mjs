@@ -104,7 +104,7 @@ test("reasoning-only completions fail visibly without doubling billed output", a
       settings: { ...DEFAULT_SETTINGS, stream: true }, provider: DEFAULT_PROVIDER_PRESET, messages: [],
       onReasoningDelta: (delta) => { reasoning += delta; },
       onRetry: () => { retryCount += 1; },
-    }), /API 응답 본문 없음 · thinking만 수신 · 종료 stop/);
+    }), /API 응답 본문 없음 · thinking만 수신 · 1차 · 공급자 미확인 · 종료 stop · IN 0 · OUT 8 · 요청 0개 메시지 · 0개 도구/);
   assert.equal(reasoning, "thinking");
   assert.equal(retryCount, 0);
   assert.equal(call, 1);
@@ -117,16 +117,14 @@ test("two empty completions become a diagnostic error instead of a saved blank a
       call += 1;
       return new Response(JSON.stringify({
         id: `gen-empty-${call}`,
+        provider: `Mock Provider ${call}`,
         choices: [{ message: { content: "" }, finish_reason: null }],
-        openrouter_metadata: {
-          endpoints: { available: [{ provider: "Mock Provider", selected: true }] },
-        },
       }), { headers: { "Content-Type": "application/json" } });
     },
   });
   await assert.rejects(
     requestCompletion({ settings: DEFAULT_SETTINGS, provider: DEFAULT_PROVIDER_PRESET, messages: [] }),
-    /API 빈 응답 · 자동 재시도 실패 · ID gen-empty-2 · 공급자 Mock Provider · 종료 사유 없음/,
+    /API 빈 응답 · 1차 · Mock Provider 1 · 종료 사유 없음 · ID gen-empty-1 · 2차 · Mock Provider 2 · 종료 사유 없음 · ID gen-empty-2 · 요청 0개 메시지 · 0개 도구/,
   );
   assert.equal(call, 2);
 });

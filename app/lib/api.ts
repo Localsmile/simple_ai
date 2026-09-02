@@ -35,6 +35,7 @@ export interface CompletionDiagnostics {
   id?: string;
   model?: string;
   provider?: string;
+  requestBytes?: number;
   receivedEvents?: number;
   malformedEvents?: number;
 }
@@ -89,6 +90,7 @@ interface ToolCallDelta {
 interface RawCompletionPayload {
   id?: string;
   model?: string;
+  provider?: string;
   choices?: Array<{
     message?: RawMessage;
     finish_reason?: string | null;
@@ -148,7 +150,8 @@ function readContent(value: unknown): string {
 
 function selectedProvider(payload: RawCompletionPayload): string | undefined {
   const metadata = payload.openrouter_metadata;
-  return metadata?.endpoints?.available?.find((endpoint) => endpoint.selected)?.provider
+  return payload.provider
+    || metadata?.endpoints?.available?.find((endpoint) => endpoint.selected)?.provider
     || [...(metadata?.attempts || [])].reverse().find((attempt) => attempt.status === 200)?.provider;
 }
 
@@ -349,6 +352,7 @@ export function serializeCompletionRequest(
 function parseJsonCompletion(
   payload: RawCompletionPayload,
   response: Response,
+  requestBytes: number,
 ): CompletionResult {
   if (payload.error) {
     const message = typeof payload.error === "string"
@@ -376,6 +380,7 @@ function parseJsonCompletion(
       id: payload.id || response.headers.get("x-generation-id") || response.headers.get("x-request-id") || undefined,
       model: payload.model,
       provider: selectedProvider(payload),
+      requestBytes,
     },
   };
 }
@@ -396,6 +401,7 @@ async function requestCompletionOnce({
   const serializedBody = serializeCompletionRequest(
     settings, provider, messages, tools, reasoningSettings, streamOverride,
   );
+  const requestBytes = new TextEncoder().encode(serializedBody).byteLength;
 
   const headers = new Headers({ "Content-Type": "application/json" });
   if (useProxy) headers.set(UPSTREAM_HEADER, resolveChatUrl(provider.baseUrl));
@@ -422,7 +428,6 @@ async function requestCompletionOnce({
   }
 
   if (!response.ok) {
-    const requestBytes = new TextEncoder().encode(serializedBody).byteLength;
     throw apiError(response.status, await response.text(), requestBytes);
   }
 
@@ -434,7 +439,7 @@ async function requestCompletionOnce({
     } catch {
       throw new Error("API 응답 형식 오류 · JSON 또는 SSE 필요");
     }
-    return parseJsonCompletion(payload, response);
+    return parseJsonCompletion(payload, response, requestBytes);
   }
 
   if (!response.body) throw new Error("API 응답 스트림 없음");
@@ -533,6 +538,7 @@ async function requestCompletionOnce({
       id: responseId,
       model: responseModel,
       provider: responseProvider,
+      requestBytes,
       receivedEvents,
       malformedEvents,
     },
@@ -549,14 +555,35 @@ function isRetryableEmptyCompletion(result: CompletionResult): boolean {
   return !result.finishReason || result.finishReason === "stop" || result.finishReason === "error";
 }
 
-function describeEmptyCompletion(result: CompletionResult): string {
+function formatDiagnosticCount(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+  return String(value);
+}
+
+function describeEmptyCompletion(label: string, result: CompletionResult): string {
   const parts = [
-    result.diagnostics.id ? `ID ${result.diagnostics.id}` : "",
-    result.diagnostics.provider ? `공급자 ${result.diagnostics.provider}` : "",
+    label,
+    result.diagnostics.provider || "공급자 미확인",
     result.finishReason ? `종료 ${result.finishReason}` : "종료 사유 없음",
+    result.usage ? `IN ${formatDiagnosticCount(result.usage.input)}` : "",
+    result.usage ? `OUT ${formatDiagnosticCount(result.usage.output)}` : "",
+    result.diagnostics.id ? `ID ${result.diagnostics.id}` : "",
     result.diagnostics.malformedEvents ? `손상 이벤트 ${result.diagnostics.malformedEvents}` : "",
   ].filter(Boolean);
   return parts.join(" · ");
+}
+
+function describeRequest(options: CompletionOptions, result: CompletionResult): string {
+  const bytes = result.diagnostics.requestBytes;
+  const reasoning = options.reasoning || options.provider.reasoning;
+  return [
+    `요청 ${options.messages.length}개 메시지`,
+    `${options.tools?.length || 0}개 도구`,
+    bytes ? `${formatDiagnosticCount(bytes)}B` : "",
+    `MAX ${formatDiagnosticCount(options.settings.maxTokens)}`,
+    `추론 ${reasoning.format}/${reasoning.level}`,
+  ].filter(Boolean).join(" · ");
 }
 
 export async function requestCompletion(options: CompletionOptions): Promise<CompletionResult> {
@@ -564,8 +591,9 @@ export async function requestCompletion(options: CompletionOptions): Promise<Com
   if (isUsableCompletion(first)) return first;
   if (!isRetryableEmptyCompletion(first)) {
     const kind = first.reasoning?.trim() ? "thinking만 수신" : "본문 없음";
-    const diagnostic = describeEmptyCompletion(first);
-    throw new Error(`API 응답 본문 없음 · ${kind}${diagnostic ? ` · ${diagnostic}` : ""}`);
+    throw new Error(
+      `API 응답 본문 없음 · ${kind} · ${describeEmptyCompletion("1차", first)} · ${describeRequest(options, first)}`,
+    );
   }
 
   options.onRetry?.();
@@ -577,6 +605,10 @@ export async function requestCompletion(options: CompletionOptions): Promise<Com
   }, false);
   if (isUsableCompletion(second)) return second;
 
-  const diagnostic = describeEmptyCompletion(second) || describeEmptyCompletion(first);
-  throw new Error(`API 빈 응답 · 자동 재시도 실패${diagnostic ? ` · ${diagnostic}` : ""}`);
+  throw new Error([
+    "API 빈 응답",
+    describeEmptyCompletion("1차", first),
+    describeEmptyCompletion("2차", second),
+    describeRequest(options, second),
+  ].join(" · "));
 }
