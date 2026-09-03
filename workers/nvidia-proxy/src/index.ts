@@ -1,7 +1,8 @@
-import { parsePublicChatTarget, UPSTREAM_HEADER } from "../../../shared/proxy-target";
+import { parsePublicApiTarget, UPSTREAM_HEADER } from "../../../shared/proxy-target";
 import { assertPublicDns, TargetDnsError } from "./target-dns";
 
 const LEGACY_UPSTREAM = "https://integrate.api.nvidia.com/v1/chat/completions";
+const OPENAI_PATH = "/proxy/openai";
 const CHAT_PATH = "/proxy/chat/completions";
 const LEGACY_PATH = "/v1/chat/completions";
 
@@ -42,7 +43,7 @@ export default {
         headers: responseHeaders(origin),
       });
     }
-    if (![CHAT_PATH, LEGACY_PATH].includes(url.pathname) || url.search) return errorResponse(404, "Not found", origin);
+    if (![OPENAI_PATH, CHAT_PATH, LEGACY_PATH].includes(url.pathname) || url.search) return errorResponse(404, "Not found", origin);
     if (!origin) return errorResponse(403, "Origin not allowed");
 
     if (request.method === "OPTIONS") {
@@ -79,7 +80,7 @@ export default {
       // Old cached clients keep their fixed destination; generic requests require a target.
       const targetHeader = request.headers.get(UPSTREAM_HEADER);
       if (url.pathname === LEGACY_PATH && targetHeader) throw new Error("기존 중계 경로는 대상 변경 불가");
-      target = parsePublicChatTarget(url.pathname === LEGACY_PATH ? LEGACY_UPSTREAM : targetHeader || "");
+      target = parsePublicApiTarget(url.pathname === LEGACY_PATH ? LEGACY_UPSTREAM : targetHeader || "");
       if (target.hostname === url.hostname) throw new Error("중계 자기 호출 차단");
     } catch (error) {
       return errorResponse(400, error instanceof Error ? error.message : "중계 대상 URL 형식 오류", origin);

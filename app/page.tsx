@@ -1006,7 +1006,12 @@ export default function Home() {
         }));
 
         if (!result.toolCalls.length || !client) break;
-        apiMessages = [...apiMessages, result.rawAssistantMessage];
+        apiMessages = [
+          ...apiMessages,
+          ...(result.rawAssistantMessages?.length
+            ? result.rawAssistantMessages
+            : [result.rawAssistantMessage]),
+        ];
 
         for (const call of result.toolCalls) {
           const event: ToolEvent = {

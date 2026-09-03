@@ -5,11 +5,12 @@ Simple AI의 GitHub Pages 클라이언트와 사용자 지정 OpenAI 호환 API 
 ## 요청 경로
 
 - `GET /health`: 중계 상태 확인. 공급자 인증·추론 상태와는 별개다.
-- `OPTIONS /proxy/chat/completions`: CORS 사전 요청.
-- `POST /proxy/chat/completions`: `X-Upstream-Url` 헤더로 지정한 Chat Completions 엔드포인트로 전달.
+- `OPTIONS /proxy/openai`: CORS 사전 요청.
+- `POST /proxy/openai`: `X-Upstream-Url` 헤더로 지정한 Chat Completions 또는 Responses 엔드포인트로 전달.
+- 기존 `OPTIONS/POST /proxy/chat/completions`: 이전 클라이언트 호환 경로.
 - 기존 `OPTIONS/POST /v1/chat/completions`: 이전 클라이언트를 위해 NVIDIA의 고정 엔드포인트를 유지한다. 이 경로에서 대상 변경은 허용하지 않는다.
 
-대상은 공개 HTTPS 도메인, 기본 HTTPS 포트, `/chat/completions`로 끝나는 경로만 허용한다. 대상의 쿼리 매개변수는 보존하며, Worker 자체 URL에는 쿼리를 허용하지 않는다. 대상 URL의 사용자명·비밀번호·fragment, IP 리터럴, 로컬·내부 도메인, 중계 자기 호출과 리다이렉트는 차단한다.
+대상은 공개 HTTPS 도메인, 기본 HTTPS 포트, `/chat/completions` 또는 `/responses`로 끝나는 경로만 허용한다. 대상의 쿼리 매개변수는 보존하며, Worker 자체 URL에는 쿼리를 허용하지 않는다. 대상 URL의 사용자명·비밀번호·fragment, IP 리터럴, 로컬·내부 도메인, 중계 자기 호출과 리다이렉트는 차단한다.
 
 매 요청마다 Cloudflare DoH로 A·AAAA를 병렬 확인하고 사설·예약·매핑 주소가 포함된 응답은 거부한다. DNS 확인 제한은 5초, DNS 응답당 최대 크기는 128KiB이다. DNS 실패 시 공급자로 요청을 보내지 않는다. DNS 조회에는 호스트명만 포함하며 API 키·경로·쿼리·본문은 포함하지 않는다.
 

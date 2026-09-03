@@ -8,7 +8,7 @@ const { DEFAULT_SETTINGS, DEFAULT_PROVIDER_PRESET, resolveProviderModel } = load
 const { CORS_PROXY_URL, UPSTREAM_HEADER, resolveCompletionUrl, supportsCorsProxy, resolveChatUrl } = loadTs("app/lib/connection.ts");
 const provider = { ...DEFAULT_PROVIDER_PRESET, ...resolveProviderModel(DEFAULT_PROVIDER_PRESET), baseUrl: upstreamUrl, connectionMode: "cors-proxy", apiKey: "test-key" };
 
-function request({ method = "POST", path = "/proxy/chat/completions", headers = {}, ...options } = {}) {
+function request({ method = "POST", path = "/proxy/openai", headers = {}, ...options } = {}) {
   return new Request(`https://proxy.test${path}`, {
     method,
     headers: { Origin: origin, Authorization: "Bearer test-key", "Content-Type": "application/json", [UPSTREAM_HEADER]: upstreamUrl, ...headers },
@@ -44,6 +44,8 @@ test("proxy route supports custom public HTTPS providers and preserves query par
   }
   assert.equal(resolveChatUrl("https://api.example.com/v1?api-version=1"), "https://api.example.com/v1/chat/completions?api-version=1");
   assert.equal(resolveChatUrl("https://api.example.com/v1?resource=foo/"), "https://api.example.com/v1/chat/completions?resource=foo/");
+  assert.equal(resolveChatUrl("https://api.example.com/v1/responses"), "https://api.example.com/v1/responses");
+  assert.equal(supportsCorsProxy("https://api.example.com/v1/responses"), true);
   for (const baseUrl of ["https://other.test/v1", "http://api.example.com/v1", "https://api.example.com:444/v1",
     "https://user:pass@api.example.com/v1", `${upstreamUrl}#fragment`, "https://localhost/v1", "https://localhost./v1",
     "https://127.0.0.1/v1", "https://2130706433/v1", "https://0x7f000001/v1", "https://[::1]/v1",
@@ -91,7 +93,7 @@ test("preflight permits Pages and loopback, rejects untrusted and opaque origins
 test("unsupported paths, targets, methods and malformed credentials never call upstream", async () => {
   const { call, rateKeys } = setup();
   for (const [options, status] of [
-    [{ path: "/other" }, 404], [{ path: "/proxy/chat/completions?url=https://other.test" }, 404],
+    [{ path: "/other" }, 404], [{ path: "/proxy/openai?url=https://other.test" }, 404],
     [{ method: "GET" }, 405], [{ headers: { Authorization: "Basic test" } }, 401],
     [{ headers: { [UPSTREAM_HEADER]: "" } }, 400], [{ headers: { [UPSTREAM_HEADER]: "https://127.0.0.1/v1/chat/completions" } }, 400],
     [{ headers: { "Content-Type": "text/plain" } }, 415], [{ headers: { "Content-Encoding": "gzip" } }, 415],
@@ -180,6 +182,81 @@ test("app routes JSON and SSE via proxy with unchanged payload and cancellation"
     assert.equal(body.chat_template_kwargs.thinking, false);
     assert.deepEqual(body.messages, [{ role: "user", content: "hello" }]);
   }
+});
+
+test("Responses endpoints use the standard request, stream, usage and tool formats", async () => {
+  const endpoint = "https://api.example.com/v1/responses";
+  const responseProvider = { ...provider, baseUrl: endpoint, model: "response-model" };
+  const calls = [];
+  const { requestCompletion, serializeCompletionRequest } = loadTs("app/lib/api.ts", {
+    fetch: async (url, init) => {
+      calls.push({ url, body: JSON.parse(init.body), headers: init.headers });
+      return new Response([
+        `data: ${JSON.stringify({ type: "response.reasoning_summary_text.delta", delta: "think" })}\n\n`,
+        `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "answer" })}\n\n`,
+        `data: ${JSON.stringify({ type: "response.completed", response: {
+          id: "resp_1", model: "response-model", status: "completed",
+          output: [
+            { id: "rs_1", type: "reasoning", summary: [{ type: "summary_text", text: "think" }] },
+            { id: "msg_1", type: "message", role: "assistant", content: [{ type: "output_text", text: "answer" }] },
+            { id: "fc_1", type: "function_call", call_id: "call_1", name: "lookup", arguments: "{}" },
+          ],
+          usage: { input_tokens: 7, output_tokens: 5, output_tokens_details: { reasoning_tokens: 2 } },
+        } })}\n\n`,
+      ].join(""), { headers: { "Content-Type": "text/event-stream" } });
+    },
+  });
+  const deltas = [], reasoning = [];
+  const result = await requestCompletion({
+    settings: { ...DEFAULT_SETTINGS, stream: true, maxTokens: 1234 }, provider: responseProvider,
+    messages: [{ role: "user", content: [{ type: "text", text: "hello" },
+      { type: "image_url", image_url: { url: "data:image/webp;base64,AA==", detail: "auto" } }] }],
+    tools: [{ type: "function", function: { name: "lookup", description: "Lookup", parameters: { type: "object" } } }],
+    onDelta: (delta) => deltas.push(delta), onReasoningDelta: (delta) => reasoning.push(delta),
+  });
+  assert.equal(calls[0].url, CORS_PROXY_URL);
+  assert.equal(calls[0].headers.get(UPSTREAM_HEADER), endpoint);
+  assert.equal(calls[0].body.max_output_tokens, 1234);
+  assert.equal(calls[0].body.max_tokens, undefined);
+  assert.equal(calls[0].body.messages, undefined);
+  assert.equal(calls[0].body.stream_options, undefined);
+  assert.deepEqual(calls[0].body.input[0].content, [
+    { type: "input_text", text: "hello" },
+    { type: "input_image", image_url: "data:image/webp;base64,AA==", detail: "auto" },
+  ]);
+  assert.deepEqual(calls[0].body.tools[0], { type: "function", name: "lookup",
+    description: "Lookup", parameters: { type: "object" } });
+  assert.equal(result.content, "answer");
+  assert.equal(result.reasoning, "think");
+  assert.deepEqual(deltas, ["answer"]);
+  assert.deepEqual(reasoning, ["think"]);
+  assert.equal(result.toolCalls[0].id, "call_1");
+  assert.equal(result.usage.reasoning, 2);
+  assert.equal(result.rawAssistantMessages.length, 3);
+  const next = JSON.parse(serializeCompletionRequest(DEFAULT_SETTINGS, responseProvider,
+    [...result.rawAssistantMessages, { role: "tool", tool_call_id: "call_1", content: "result" }]));
+  assert.equal(next.input.at(-2).type, "function_call");
+  assert.deepEqual(next.input.at(-1), { type: "function_call_output", call_id: "call_1", output: "result" });
+});
+
+test("Responses JSON errors and incomplete output remain concise and actionable", async () => {
+  const responseProvider = { ...provider, baseUrl: "https://api.example.com/v1/responses" };
+  const { requestCompletion } = loadTs("app/lib/api.ts", {
+    fetch: async () => Response.json({ id: "resp_2", status: "incomplete",
+      incomplete_details: { reason: "max_output_tokens" }, output: [
+        { type: "message", content: [{ type: "output_text", text: "partial" }] },
+      ], usage: { input_tokens: 3, output_tokens: 9 } }),
+  });
+  const result = await requestCompletion({ settings: { ...DEFAULT_SETTINGS, stream: false },
+    provider: responseProvider, messages: [] });
+  assert.equal(result.content, "partial");
+  assert.equal(result.finishReason, "length");
+
+  const html = loadTs("app/lib/api.ts", {
+    fetch: async () => new Response("<!DOCTYPE html><html>large injected page</html>", { status: 404 }),
+  });
+  await assert.rejects(html.requestCompletion({ settings: DEFAULT_SETTINGS,
+    provider: responseProvider, messages: [] }), /^ApiRequestError: API 404: HTML 응답 · 엔드포인트 확인$/);
 });
 
 test("invalid proxy configuration fails before transmitting credentials", async () => {

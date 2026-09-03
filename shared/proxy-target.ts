@@ -1,8 +1,8 @@
 export const PROXY_HOST = "simple-ai-nvidia-proxy.localai0301.workers.dev";
-export const CORS_PROXY_URL = `https://${PROXY_HOST}/proxy/chat/completions`;
+export const CORS_PROXY_URL = `https://${PROXY_HOST}/proxy/openai`;
 export const UPSTREAM_HEADER = "X-Upstream-Url";
 
-export function parsePublicChatTarget(value: string): URL {
+export function parsePublicApiTarget(value: string): URL {
   if (!value || value.length > 8192 || /[\s\\]/.test(value)) {
     throw new Error("중계 대상 URL 형식 오류");
   }
@@ -20,8 +20,9 @@ export function parsePublicChatTarget(value: string): URL {
     || host === PROXY_HOST || host.endsWith(`.${PROXY_HOST}`)) {
     throw new Error("중계는 공개 도메인만 지원 · 로컬·IP 주소 사용 불가");
   }
-  if (!/\/chat\/completions\/?$/.test(url.pathname) || /%(2f|5c|25)/i.test(url.pathname)) {
-    throw new Error("중계는 Chat Completions 경로만 지원");
+  if (!/(?:\/chat\/completions|\/responses)\/?$/i.test(url.pathname)
+    || /%(2f|5c|25)/i.test(url.pathname)) {
+    throw new Error("중계는 Chat Completions 또는 Responses 경로만 지원");
   }
   return url;
 }
