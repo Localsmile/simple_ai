@@ -13,8 +13,10 @@ import type {
   ConversationSettings,
   McpConnectionState,
   ProviderPreset,
+  ModelPreset,
 } from "../types";
-import { DEFAULT_REASONING, getActiveProvider } from "../types";
+import { DEFAULT_MODEL_PRESET, getActiveProvider, getProviderModel } from "../types";
+import { modelPresetLabel } from "../lib/models";
 import { ReasoningControls } from "./ReasoningControls";
 import { McpSettings } from "./McpSettings";
 import { MarkdownView } from "./MarkdownView";
@@ -54,7 +56,7 @@ function IntegerSettingInput({
   const commit = () => {
     const parsed = Number(draft.trim());
     const isUnlimited = allowUnlimited && parsed === -1;
-    const isInRange = Number.isInteger(parsed) && parsed >= minimum && (
+    const isInRange = Number.isSafeInteger(parsed) && parsed >= minimum && (
       maximum === undefined || parsed <= maximum
     );
 
@@ -106,6 +108,7 @@ export function SettingsPanel({
   const activeProvider = settings.providerPresets.find(
     (preset) => preset.id === conversationSettings.providerPresetId,
   ) || getActiveProvider(settings);
+  const activeModel = getProviderModel(activeProvider, conversationSettings.modelPresetId);
 
   const update = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
     onChange({ ...settings, [key]: value });
@@ -131,16 +134,15 @@ export function SettingsPanel({
   };
 
   const addProvider = () => {
+    const model: ModelPreset = { ...DEFAULT_MODEL_PRESET, id: presetId() };
     const next: ProviderPreset = {
       id: presetId(),
-      name: `연결 ${settings.providerPresets.length + 1}`,
+      name: `제공자 ${settings.providerPresets.length + 1}`,
       baseUrl: "",
       connectionMode: "direct",
       apiKey: "",
-      model: "",
-      vision: false,
-      extraBody: "",
-      reasoning: { ...DEFAULT_REASONING },
+      models: [model],
+      defaultModelId: model.id,
     };
     setShowApiKey(false);
     onChange({
@@ -148,6 +150,25 @@ export function SettingsPanel({
       activeProviderId: next.id,
       providerPresets: [...settings.providerPresets, next],
     });
+  };
+
+  const updateModel = (changes: Partial<Omit<ModelPreset, "id">>) => {
+    updateProvider("models", activeProvider.models.map((model) => model.id === activeModel.id
+      ? { ...model, ...changes } : model));
+  };
+
+  const addModel = () => {
+    const model: ModelPreset = { ...DEFAULT_MODEL_PRESET, id: presetId() };
+    onChange({ ...settings, providerPresets: settings.providerPresets.map((provider) =>
+      provider.id === activeProvider.id
+        ? { ...provider, models: [...provider.models, model], defaultModelId: model.id } : provider) });
+  };
+
+  const removeModel = () => {
+    if (activeProvider.models.length <= 1) return;
+    const models = activeProvider.models.filter((model) => model.id !== activeModel.id);
+    onChange({ ...settings, providerPresets: settings.providerPresets.map((provider) =>
+      provider.id === activeProvider.id ? { ...provider, models, defaultModelId: models[0].id } : provider) });
   };
 
   const removeProvider = () => {
@@ -199,7 +220,7 @@ export function SettingsPanel({
             <section className="settings-section">
               <div className="field-group">
                 <span className="field-label">
-                  현재 대화 연결 <em>{settings.providerPresets.length}개</em>
+                  API 제공자 <em>{settings.providerPresets.length}개</em>
                 </span>
                 <div className="preset-toolbar">
                   <select
@@ -208,21 +229,21 @@ export function SettingsPanel({
                       setShowApiKey(false);
                       update("activeProviderId", event.target.value);
                     }}
-                    aria-label="활성 연결 프리셋"
+                    aria-label="API 제공자"
                   >
                     {settings.providerPresets.map((preset) => (
                       <option key={preset.id} value={preset.id}>{preset.name}</option>
                     ))}
                   </select>
-                  <button type="button" onClick={addProvider} aria-label="연결 프리셋 추가" title="추가">
+                  <button type="button" onClick={addProvider} aria-label="제공자 추가" title="제공자 추가">
                     <Plus size={16} />
                   </button>
                   <button
                     type="button"
                     onClick={removeProvider}
                     disabled={settings.providerPresets.length <= 1}
-                    aria-label="현재 연결 프리셋 삭제"
-                    title="삭제"
+                    aria-label="제공자 삭제"
+                    title="제공자 삭제"
                   >
                     <Trash2 size={15} />
                   </button>
@@ -230,12 +251,12 @@ export function SettingsPanel({
               </div>
 
               <label className="field-group">
-                <span className="field-label">프리셋 이름</span>
+                <span className="field-label">제공자 이름</span>
                 <input
                   type="text"
                   value={activeProvider.name}
                   onChange={(event) => updateProvider("name", event.target.value)}
-                  placeholder="연결 이름"
+                  placeholder="제공자 이름"
                 />
               </label>
 
@@ -287,12 +308,27 @@ export function SettingsPanel({
                 </span>
               </label>
 
+              <section className="model-settings" aria-label="모델 설정">
+              <div className="field-group">
+                <span className="field-label">모델 <em>{activeProvider.models.length}개</em></span>
+                <div className="preset-toolbar">
+                  <select value={activeModel.id} aria-label="설정 모델"
+                    onChange={(event) => updateProvider("defaultModelId", event.target.value)}>
+                    {activeProvider.models.map((model) => (
+                      <option key={model.id} value={model.id}>{modelPresetLabel(activeProvider, model)}</option>
+                    ))}
+                  </select>
+                  <button type="button" onClick={addModel} aria-label="모델 추가" title="모델 추가"><Plus size={16} /></button>
+                  <button type="button" onClick={removeModel} disabled={activeProvider.models.length <= 1}
+                    aria-label="모델 삭제" title="모델 삭제"><Trash2 size={15} /></button>
+                </div>
+              </div>
               <label className="field-group">
-                <span className="field-label">모델</span>
+                <span className="field-label">모델 ID</span>
                 <input
                   type="text"
-                  value={conversationSettings.model}
-                  onChange={(event) => updateConversation("model", event.target.value)}
+                  value={activeModel.model}
+                  onChange={(event) => updateModel({ model: event.target.value })}
                   spellCheck={false}
                   placeholder="model-name"
                 />
@@ -304,31 +340,41 @@ export function SettingsPanel({
                 </span>
                 <input
                   type="checkbox"
-                  checked={conversationSettings.vision}
-                  onChange={(event) => updateConversation("vision", event.target.checked)}
+                  checked={activeModel.vision}
+                  onChange={(event) => updateModel({ vision: event.target.checked })}
                 />
               </label>
 
-              <ReasoningControls value={activeProvider.reasoning} selectedLevels={activeProvider.reasoningLevels}
-                onChange={(reasoning, reasoningLevels) => onChange({
-                  ...settings,
-                  providerPresets: settings.providerPresets.map((preset) => preset.id === activeProvider.id
-                    ? { ...preset, reasoning, reasoningLevels } : preset),
-                })} />
+              <label className="field-group">
+                <span className="field-label">최대 출력 토큰</span>
+                <IntegerSettingInput key={`max-tokens:${activeModel.id}:${activeModel.maxTokens}`}
+                  value={activeModel.maxTokens} minimum={1}
+                  onCommit={(value) => updateModel({ maxTokens: value })} />
+              </label>
+              <label className="field-group">
+                <span className="field-label">컨텍스트 한도</span>
+                <IntegerSettingInput key={`context-limit:${activeModel.id}:${activeModel.contextLimit}`}
+                  value={activeModel.contextLimit} minimum={2048} allowUnlimited
+                  onCommit={(value) => updateModel({ contextLimit: value })} />
+                <small>-1: 무제한</small>
+              </label>
+              <ReasoningControls value={activeModel.reasoning} selectedLevels={activeModel.reasoningLevels}
+                onChange={(reasoning, reasoningLevels) => updateModel({ reasoning, reasoningLevels })} />
 
               <details className="advanced-request">
                 <summary>추가 요청 옵션</summary>
                 <label className="field-group">
                   <span className="field-label">추가 요청 JSON</span>
                   <textarea
-                    value={activeProvider.extraBody}
-                    onChange={(event) => updateProvider("extraBody", event.target.value)}
+                    value={activeModel.extraBody}
+                    onChange={(event) => updateModel({ extraBody: event.target.value })}
                     spellCheck={false}
                     placeholder={'{\n  "parameter": "value"\n}'}
                     rows={6}
                   />
                 </label>
               </details>
+              </section>
 
               <label className="switch-row">
                 <span>
@@ -412,29 +458,6 @@ export function SettingsPanel({
                   value={conversationSettings.temperature}
                   onChange={(event) => updateConversation("temperature", Number(event.target.value))}
                 />
-              </label>
-
-              <label className="field-group">
-                <span className="field-label">최대 출력 토큰</span>
-                <IntegerSettingInput
-                  key={`max-tokens:${conversationId}:${conversationSettings.maxTokens}`}
-                  value={conversationSettings.maxTokens}
-                  minimum={1}
-                  maximum={131072}
-                  onCommit={(value) => updateConversation("maxTokens", value)}
-                />
-              </label>
-
-              <label className="field-group">
-                <span className="field-label">컨텍스트 한도</span>
-                <IntegerSettingInput
-                  key={`context-limit:${conversationId}:${conversationSettings.contextLimit}`}
-                  value={conversationSettings.contextLimit}
-                  minimum={2048}
-                  allowUnlimited
-                  onCommit={(value) => updateConversation("contextLimit", value)}
-                />
-                <small>-1: 무제한 · 최소 2048</small>
               </label>
 
               <label className="field-group">

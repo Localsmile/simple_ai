@@ -1,6 +1,6 @@
-import type { AppSettings, Conversation, ProviderPreset, McpServerConfig, McpAuthType } from "../types";
+import type { AppSettings, Conversation, ProviderPreset, ModelPreset, McpServerConfig, McpAuthType } from "../types";
 import { DEFAULT_PROVIDER_PRESET, DEFAULT_SETTINGS } from "../types";
-import { configuredReasoningLevels, normalizeReasoning, resolvePresetReasoning } from "./reasoning";
+import { normalizeContextLimit, normalizeModel, normalizeOutputLimit } from "./models";
 import { normalizeConnectionMode } from "./connection";
 
 const DB_NAME = "simple-ai";
@@ -93,27 +93,37 @@ function readJson<T>(storage: Storage, key: string, fallback: T): T {
 }
 
 function normalizePresets(saved: Partial<AppSettings> & LegacySettings): ProviderPreset[] {
-  if (Array.isArray(saved.providerPresets) && saved.providerPresets.length) {
-    return saved.providerPresets.map((preset, index) => ({
-      id: typeof preset.id === "string" && preset.id ? preset.id : `preset-${index + 1}`,
-      name: typeof preset.name === "string" && preset.name ? preset.name : `연결 ${index + 1}`,
+  const presets = Array.isArray(saved.providerPresets) && saved.providerPresets.length
+    ? saved.providerPresets : [{ ...saved, id: DEFAULT_PROVIDER_PRESET.id }];
+  const limits = {
+    maxTokens: normalizeOutputLimit(saved.maxTokens), contextLimit: normalizeContextLimit(saved.contextLimit),
+  };
+  const providerIds = new Set<string>();
+  return presets.map((value, index) => {
+    const preset = value as Partial<ProviderPreset> & Partial<ModelPreset>;
+    let id = typeof preset.id === "string" && preset.id ? preset.id : `preset-${index + 1}`;
+    while (providerIds.has(id)) id += "_";
+    providerIds.add(id);
+    const modelIds = new Set<string>();
+    const models = (Array.isArray(preset.models) && preset.models.length ? preset.models : [preset])
+      .map((model, modelIndex) => {
+        let modelId = Array.isArray(preset.models) && typeof model.id === "string" && model.id
+          ? model.id : `${id}-model-${modelIndex + 1}`;
+        while (modelIds.has(modelId)) modelId += "_";
+        modelIds.add(modelId);
+        return normalizeModel(model, modelId, limits);
+      });
+    return {
+      id,
+      name: typeof preset.name === "string" && preset.name ? preset.name : `제공자 ${index + 1}`,
       baseUrl: typeof preset.baseUrl === "string" ? preset.baseUrl : "",
       connectionMode: normalizeConnectionMode(preset.connectionMode),
       apiKey: "",
-      model: typeof preset.model === "string" ? preset.model : "",
-      vision: Boolean(preset.vision),
-      extraBody: typeof preset.extraBody === "string" ? preset.extraBody : "",
-      reasoning: resolvePresetReasoning(preset),
-      reasoningLevels: configuredReasoningLevels(normalizeReasoning(preset.reasoning), preset.reasoningLevels),
-    }));
-  }
-
-  return [{
-    ...DEFAULT_PROVIDER_PRESET,
-    baseUrl: typeof saved.baseUrl === "string" ? saved.baseUrl : "",
-    model: typeof saved.model === "string" ? saved.model : "",
-    vision: Boolean(saved.vision),
-  }];
+      models,
+      defaultModelId: models.some((model) => model.id === preset.defaultModelId)
+        ? preset.defaultModelId! : models[0].id,
+    };
+  });
 }
 
 export function normalizeMcpServers(saved: Partial<AppSettings> & LegacySettings): McpServerConfig[] {
@@ -211,11 +221,8 @@ export function saveSettings(settings: AppSettings): void {
       name: preset.name,
       baseUrl: preset.baseUrl,
       connectionMode: preset.connectionMode,
-      model: preset.model,
-      vision: preset.vision,
-      extraBody: preset.extraBody,
-      reasoning: preset.reasoning,
-      reasoningLevels: preset.reasoningLevels,
+      defaultModelId: preset.defaultModelId,
+      models: preset.models.map((model) => normalizeModel(model, model.id)),
     })),
   };
   for (const key of ["mcpUrl", "mcpAuthType", "mcpToken", "mcpToolLimit"] as const) {

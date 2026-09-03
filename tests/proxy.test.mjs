@@ -4,9 +4,9 @@ import { loadTs, memoryStorage } from "./load-ts.mjs";
 
 const origin = "https://localsmile.github.io";
 const upstreamUrl = "https://integrate.api.nvidia.com/v1/chat/completions";
-const { DEFAULT_SETTINGS, DEFAULT_PROVIDER_PRESET } = loadTs("app/types.ts");
+const { DEFAULT_SETTINGS, DEFAULT_PROVIDER_PRESET, resolveProviderModel } = loadTs("app/types.ts");
 const { CORS_PROXY_URL, UPSTREAM_HEADER, resolveCompletionUrl, supportsCorsProxy, resolveChatUrl } = loadTs("app/lib/connection.ts");
-const provider = { ...DEFAULT_PROVIDER_PRESET, baseUrl: upstreamUrl, connectionMode: "cors-proxy", apiKey: "test-key" };
+const provider = { ...DEFAULT_PROVIDER_PRESET, ...resolveProviderModel(DEFAULT_PROVIDER_PRESET), baseUrl: upstreamUrl, connectionMode: "cors-proxy", apiKey: "test-key" };
 
 function request({ method = "POST", path = "/proxy/chat/completions", headers = {}, ...options } = {}) {
   return new Request(`https://proxy.test${path}`, {

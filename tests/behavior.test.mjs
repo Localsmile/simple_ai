@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { loadTs, memoryStorage } from "./load-ts.mjs";
 
-const { DEFAULT_SETTINGS, DEFAULT_PROVIDER_PRESET, DEFAULT_REASONING } = loadTs("app/types.ts");
+const { DEFAULT_SETTINGS, DEFAULT_PROVIDER_PRESET: DEFAULT_PROVIDER, DEFAULT_REASONING, resolveProviderModel } = loadTs("app/types.ts");
+const DEFAULT_PROVIDER_PRESET = resolveProviderModel(DEFAULT_PROVIDER);
 
 test("reasoning adapters emit only the selected wire format and preserve the default request", () => {
   const { serializeCompletionRequest } = loadTs("app/lib/api.ts");
@@ -209,18 +210,19 @@ test("quick reasoning selection uses the configured budget and custom mapping in
 test("reasoning preset settings persist independently and migrate legacy presets", () => {
   const localStorage = memoryStorage(), sessionStorage = memoryStorage();
   const { loadSettings, saveSettings } = loadTs("app/lib/storage.ts", { window: {}, localStorage, sessionStorage });
-  const presets = [
+  const legacyPresets = [
     { ...DEFAULT_PROVIDER_PRESET, id: "first", reasoning: { ...DEFAULT_REASONING, level: "high" }, reasoningLevels: ["low", "high"] },
     { ...DEFAULT_PROVIDER_PRESET, id: "second", reasoning: { ...DEFAULT_REASONING, format: "reasoning", level: "budget", budget: 4096 }, reasoningLevels: ["budget"] },
   ];
-  saveSettings({ ...DEFAULT_SETTINGS, providerPresets: presets });
+  localStorage.setItem("simple-ai:settings", JSON.stringify({ providerPresets: legacyPresets }));
+  saveSettings(loadSettings());
   const reloaded = loadSettings().providerPresets;
-  assert.deepEqual(reloaded.map(({ reasoning, reasoningLevels }) => ({ reasoning, reasoningLevels })),
-    presets.map(({ reasoning, reasoningLevels }) => ({ reasoning, reasoningLevels })));
+  assert.deepEqual(reloaded.map(({ models: [{ reasoning, reasoningLevels }] }) => ({ reasoning, reasoningLevels })),
+    legacyPresets.map(({ reasoning, reasoningLevels }) => ({ reasoning, reasoningLevels })));
   localStorage.setItem("simple-ai:settings", JSON.stringify({ providerPresets: [
     { ...DEFAULT_PROVIDER_PRESET, reasoning: { ...DEFAULT_REASONING, format: "thinking", level: "max" } },
   ] }));
-  const legacy = loadSettings().providerPresets[0];
+  const legacy = loadSettings().providerPresets[0].models[0];
   assert.equal(legacy.reasoning.level, "max");
   assert.deepEqual(legacy.reasoningLevels, ["default", "none", "low", "high", "max"]);
 });

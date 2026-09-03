@@ -1,4 +1,4 @@
-import { DEFAULT_REASONING, type ProviderPreset, type ReasoningSettings, type ReasoningLevel } from "../types";
+import { DEFAULT_REASONING, type ModelPreset, type ReasoningSettings, type ReasoningLevel } from "../types";
 
 export const REASONING_LEVELS: ReasoningLevel[] = [
   "default", "none", "minimal", "low", "medium", "high", "xhigh", "max", "budget",
@@ -34,7 +34,7 @@ export function configuredReasoningLevels(
 }
 
 export function resolvePresetReasoning(
-  preset: Pick<ProviderPreset, "reasoning" | "reasoningLevels">,
+  preset: Pick<ModelPreset, "reasoning" | "reasoningLevels">,
   level?: ReasoningLevel,
 ): ReasoningSettings {
   const config = normalizeReasoning(preset.reasoning);

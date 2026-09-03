@@ -40,7 +40,8 @@ test("supports custom connection presets and message controls", async () => {
   ]);
   assert.match(types, /providerPresets:\s*ProviderPreset\[\]/);
   assert.match(types, /activeProviderId:\s*string/);
-  assert.match(settings, /연결 프리셋/);
+  assert.match(settings, /API 제공자/);
+  assert.match(settings, /모델 추가/);
   assert.match(settings, /addProvider/);
   assert.match(settings, /removeProvider/);
   assert.doesNotMatch(settings, />OpenAI<|>OpenRouter<|>DeepSeek<|>Qwen</);
@@ -86,9 +87,10 @@ test("keeps manually renamed titles stable after message changes", async () => {
 test("offers conversation preset swapping in the composer", async () => {
   const page = await readFile(new URL("app/page.tsx", root), "utf8");
   assert.match(page, /const swapConversationProvider = useCallback/);
-  assert.match(page, /providerPresetId: provider\.id,[\s\S]*?model: provider\.model,[\s\S]*?vision: provider\.vision/);
+  assert.match(page, /selectConversationModel\(conversation\.settings, provider, modelPresetId\)/);
   assert.match(page, /className="composer-preset-select"/);
-  assert.match(page, /aria-label="API 프리셋 빠른 전환"/);
+  assert.match(page, /aria-label="모델 빠른 전환"/);
+  assert.match(page, /<optgroup key=\{preset.id\} label=\{preset.name\}>/);
   assert.match(page, /settings\.providerPresets\.map\(\(preset\)/);
 });
 
@@ -200,8 +202,8 @@ test("binds connection and generation settings to each conversation", async () =
   assert.match(page, /setSettings\(\(current\) => syncAppDefaults\(current, next\.settings\)\)/);
   assert.match(page, /settings:\s*responseSettings/);
   assert.match(page, /provider:\s*responseProvider/);
-  assert.match(settings, /현재 대화 연결/);
-  assert.match(settings, /conversationSettings\.model/);
+  assert.match(settings, /API 제공자/);
+  assert.match(settings, /conversationSettings\.modelPresetId/);
   assert.match(settings, /conversationSettings\.systemPrompt/);
 });
 
@@ -213,14 +215,18 @@ test("edits preset reasoning in the connection tab and conversation levels besid
   ]);
   const connection = settings.slice(settings.indexOf('tab === "connection" &&'), settings.indexOf('tab === "generation" &&'));
   const generation = settings.slice(settings.indexOf('tab === "generation" &&'));
-  assert.match(connection, /ReasoningControls value=\{activeProvider\.reasoning\}/);
-  assert.match(connection, /selectedLevels=\{activeProvider\.reasoningLevels\}/);
+  assert.match(connection, /ReasoningControls value=\{activeModel\.reasoning\}/);
+  assert.match(connection, /selectedLevels=\{activeModel\.reasoningLevels\}/);
+  assert.match(connection, /value=\{activeModel\.maxTokens\}/);
+  assert.match(connection, /value=\{activeModel\.contextLimit\}/);
+  assert.doesNotMatch(generation, /최대 출력 토큰|updateConversation\("maxTokens"|updateConversation\("contextLimit"/);
   assert.doesNotMatch(generation, /ReasoningControls/);
   assert.match(controls, /사용할 추론 레벨/);
   assert.match(controls, /기본 추론 레벨/);
-  const defaults = page.slice(page.indexOf("function syncAppDefaults("), page.indexOf("function newConversation("));
+  const models = await readFile(new URL("app/lib/models.ts", root), "utf8");
+  const defaults = models.slice(models.indexOf("function syncAppDefaults("), models.indexOf("function reconcileConversationModel("));
   assert.doesNotMatch(defaults, /reasoning/);
-  assert.match(page, /reasoning: resolvePresetReasoning\(provider, stored\?\.reasoning\?\.level\)/);
+  assert.match(models, /reasoning: resolvePresetReasoning\(model, stored\?\.reasoning\?\.level\)/);
   assert.match(page, /reasoning: responseReasoning/);
   const composer = page.slice(page.indexOf('className="composer-reasoning"'), page.indexOf('className={`vision-toggle'));
   assert.match(composer, /value=\{conversationReasoning\.level\} disabled=\{generating\}/);
@@ -261,7 +267,8 @@ test("supports a per-conversation markdown opening message", async () => {
     readFile(new URL("app/components/MessageList.tsx", root), "utf8"),
   ]);
   assert.match(types, /openingMessage:\s*string/);
-  assert.match(page, /openingMessage:\s*""/);
+  const models = await readFile(new URL("app/lib/models.ts", root), "utf8");
+  assert.match(models, /openingMessage:\s*""/);
   assert.match(page, /seedConversation\.settings\.openingMessage/);
   assert.match(page, /nextSettings\.openingMessage\.trim\(\)/);
   assert.match(api, /openingMessage = ""/);
@@ -304,9 +311,10 @@ test("uses one shared image scale and renders user messages as markdown", async 
 
 test("starts every new conversation with an empty system prompt", async () => {
   const page = await readFile(new URL("app/page.tsx", root), "utf8");
+  const models = await readFile(new URL("app/lib/models.ts", root), "utf8");
   assert.match(
-    page,
-    /function conversationSettingsFromApp[\s\S]*?systemPrompt:\s*""[\s\S]*?function normalizeConversation/,
+    models,
+    /function conversationSettingsFromApp[\s\S]*?systemPrompt:\s*""/,
   );
   assert.match(page, /seedConversation\.settings\.systemPrompt/);
 });
@@ -469,8 +477,8 @@ test("diagnoses reasoning-only responses without silently replacing the final bo
   assert.match(messageList, /message\.finishReason === "length"/);
   assert.match(messageList, /본문으로 사용/);
   assert.match(settings, /추가 요청 JSON/);
-  assert.match(settings, /updateProvider\("extraBody"/);
-  assert.match(storage, /extraBody: typeof preset\.extraBody === "string"/);
+  assert.match(settings, /updateModel\(\{ extraBody:/);
+  assert.match(storage, /models: preset.models.map/);
   const reasoning = await readFile(new URL("app/lib/reasoning.ts", root), "utf8");
   assert.match(reasoning, /PROTECTED_REQUEST_FIELDS = new Set/);
   assert.match(reasoning, /if \(value === null\) delete target\[key\]/);

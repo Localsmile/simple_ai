@@ -67,6 +67,7 @@ export interface ChatMessage {
 
 export interface ConversationSettings {
   providerPresetId: string;
+  modelPresetId: string;
   model: string;
   vision: boolean;
   systemPrompt: string;
@@ -96,12 +97,23 @@ export interface ProviderPreset {
   baseUrl: string;
   connectionMode: "direct" | "cors-proxy";
   apiKey: string;
+  models: ModelPreset[];
+  defaultModelId: string;
+}
+
+export interface ModelPreset {
+  id: string;
   model: string;
   vision: boolean;
   extraBody: string;
   reasoning: ReasoningSettings;
   reasoningLevels?: ReasoningLevel[];
+  maxTokens: number;
+  contextLimit: number;
 }
+
+export type CompletionProvider = Omit<ProviderPreset, "models" | "defaultModelId">
+  & Omit<ModelPreset, "id">;
 
 export type ReasoningLevel = "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "budget";
 export interface ReasoningSettings {
@@ -171,16 +183,24 @@ export const DEFAULT_REASONING: ReasoningSettings = {
   customMapping: "",
 };
 
-export const DEFAULT_PROVIDER_PRESET: ProviderPreset = {
-  id: "default",
-  name: "연결 1",
-  baseUrl: "",
-  connectionMode: "direct",
-  apiKey: "",
+export const DEFAULT_MODEL_PRESET: ModelPreset = {
+  id: "default-model",
   model: "",
   vision: false,
   extraBody: "",
   reasoning: DEFAULT_REASONING,
+  maxTokens: 4096,
+  contextLimit: 131072,
+};
+
+export const DEFAULT_PROVIDER_PRESET: ProviderPreset = {
+  id: "default",
+  name: "제공자 1",
+  baseUrl: "",
+  connectionMode: "direct",
+  apiKey: "",
+  models: [DEFAULT_MODEL_PRESET],
+  defaultModelId: DEFAULT_MODEL_PRESET.id,
 };
 
 export const DEFAULT_WEB_SEARCH_MCP: McpServerConfig = {
@@ -217,4 +237,19 @@ export function getActiveProvider(settings: AppSettings): ProviderPreset {
     settings.providerPresets[0] ||
     DEFAULT_PROVIDER_PRESET
   );
+}
+
+export function getProviderModel(provider: ProviderPreset, modelId?: string): ModelPreset {
+  return provider.models.find((model) => model.id === modelId)
+    || provider.models.find((model) => model.id === provider.defaultModelId)
+    || provider.models[0] || DEFAULT_MODEL_PRESET;
+}
+
+export function resolveProviderModel(provider: ProviderPreset, modelId?: string): CompletionProvider {
+  const { id: _modelId, ...model } = getProviderModel(provider, modelId);
+  void _modelId;
+  return {
+    id: provider.id, name: provider.name, baseUrl: provider.baseUrl,
+    connectionMode: provider.connectionMode, apiKey: provider.apiKey, ...model,
+  };
 }

@@ -39,7 +39,7 @@ export function ReasoningControls({ value, selectedLevels, onChange }: {
         </div>
       </fieldset>
       <label className="field-group">
-        <span className="field-label">기본 추론 레벨 <em>프리셋</em></span>
+        <span className="field-label">기본 추론 레벨</span>
         <select value={config.level} onChange={(event) => onChange({
           ...value, level: event.target.value as ReasoningSettings["level"],
         }, levels)}>

@@ -1465,6 +1465,7 @@ a:focus-visible {
 .settings-tabs button.active { color: var(--text); background: var(--panel-3); }
 .settings-content { min-height: 0; overflow: auto; }
 .settings-section { display: flex; flex-direction: column; gap: 20px; padding: 22px; }
+.model-settings { display: flex; flex-direction: column; gap: 20px; min-width: 0; padding-top: 20px; border-top: 1px solid var(--line); }
 .reasoning-settings { display: grid; gap: 14px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
 .reasoning-level-options { min-width: 0; margin: 0; padding: 0; border: 0; }
 .reasoning-level-options legend { margin-bottom: 8px; padding: 0; color: var(--text-soft); font-size: 11px; font-weight: 560; }

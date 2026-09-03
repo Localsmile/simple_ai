@@ -2,7 +2,7 @@ import type {
   AppSettings,
   ChatMessage,
   OpenAIToolCall,
-  ProviderPreset,
+  CompletionProvider,
   ReasoningSettings,
   TokenUsage,
 } from "../types";
@@ -41,7 +41,7 @@ export interface CompletionDiagnostics {
 
 export interface CompletionOptions {
   settings: AppSettings;
-  provider: ProviderPreset;
+  provider: CompletionProvider;
   reasoning?: ReasoningSettings;
   messages: ApiMessage[];
   tools?: ApiTool[];
@@ -287,7 +287,7 @@ function apiError(status: number, body: string, requestBytes: number): ApiReques
 
 export function serializeCompletionRequest(
   settings: AppSettings,
-  provider: ProviderPreset,
+  provider: CompletionProvider,
   messages: ApiMessage[],
   tools?: ApiTool[],
   reasoning: ReasoningSettings = provider.reasoning,

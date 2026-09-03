@@ -46,6 +46,10 @@ import { McpPool, mcpConnectionKey } from "./lib/mcp";
 import { configuredReasoningLevels, reasoningLevelLabel, resolvePresetReasoning } from "./lib/reasoning";
 import { enterSendsMessage, shouldSendMessage } from "./lib/input";
 import {
+  conversationSettingsFromApp, migrateConversationModels, modelPresetLabel,
+  normalizeConversationSettings, reconcileConversationModel, selectConversationModel, syncAppDefaults,
+} from "./lib/models";
+import {
   deleteConversation,
   listConversations,
   loadSettings,
@@ -65,7 +69,7 @@ import type {
   TokenUsage,
   ToolEvent,
 } from "./types";
-import { DEFAULT_SETTINGS, getActiveProvider } from "./types";
+import { DEFAULT_SETTINGS, getActiveProvider, resolveProviderModel } from "./types";
 
 const TEXT_EXTENSIONS = new Set([
   "txt", "md", "markdown", "csv", "tsv", "json", "jsonl", "xml", "yaml", "yml",
@@ -86,33 +90,11 @@ function timestamp(): number {
   return Date.now();
 }
 
-function conversationSettingsFromApp(settings: AppSettings): ConversationSettings {
-  const provider = getActiveProvider(settings);
-  return {
-    providerPresetId: provider.id,
-    model: provider.model,
-    vision: provider.vision,
-    systemPrompt: "",
-    openingMessage: "",
-    temperature: settings.temperature,
-    maxTokens: settings.maxTokens,
-    contextLimit: settings.contextLimit,
-    historyTurns: settings.historyTurns,
-    autoTrimContext: settings.autoTrimContext,
-    stream: settings.stream,
-    reasoning: resolvePresetReasoning(provider),
-  };
-}
-
 function normalizeConversation(
   conversation: Conversation,
   appSettings: AppSettings,
 ): Conversation {
   const stored = conversation.settings as Partial<ConversationSettings> | undefined;
-  const provider = appSettings.providerPresets.find(
-    (preset) => preset.id === stored?.providerPresetId,
-  ) || getActiveProvider(appSettings);
-
   const normalized = {
     ...conversation,
     messages: Array.isArray(conversation.messages)
@@ -138,36 +120,7 @@ function normalizeConversation(
           return { ...message, responseVariants, activeResponseVariantId };
         })
       : [],
-    settings: {
-      providerPresetId: provider.id,
-      model: typeof stored?.model === "string" ? stored.model : provider.model,
-      vision: typeof stored?.vision === "boolean" ? stored.vision : provider.vision,
-      systemPrompt: typeof stored?.systemPrompt === "string"
-        ? stored.systemPrompt
-        : appSettings.systemPrompt,
-      openingMessage: typeof stored?.openingMessage === "string" ? stored.openingMessage : "",
-      temperature: typeof stored?.temperature === "number"
-        ? stored.temperature
-        : appSettings.temperature,
-      maxTokens: typeof stored?.maxTokens === "number" && stored.maxTokens > 0
-        ? stored.maxTokens
-        : appSettings.maxTokens,
-      contextLimit: typeof stored?.contextLimit === "number" && (
-        stored.contextLimit === -1 || stored.contextLimit >= 2048
-      )
-        ? stored.contextLimit
-        : appSettings.contextLimit,
-      historyTurns: typeof stored?.historyTurns === "number" && (
-        stored.historyTurns === -1 || stored.historyTurns >= 1
-      )
-        ? Math.floor(stored.historyTurns)
-        : appSettings.historyTurns,
-      autoTrimContext: typeof stored?.autoTrimContext === "boolean"
-        ? stored.autoTrimContext
-        : appSettings.autoTrimContext,
-      stream: typeof stored?.stream === "boolean" ? stored.stream : appSettings.stream,
-      reasoning: resolvePresetReasoning(provider, stored?.reasoning?.level),
-    },
+    settings: normalizeConversationSettings(stored, appSettings),
   } as Conversation & { requestBodyProfile?: unknown };
   const currentTitle = typeof conversation.title === "string" ? conversation.title.trim() : "";
   normalized.title = currentTitle || titleFromMessages(normalized.messages);
@@ -177,32 +130,6 @@ function normalizeConversation(
       && currentTitle !== titleFromMessages(normalized.messages);
   delete normalized.requestBodyProfile;
   return normalized;
-}
-
-function syncAppDefaults(
-  appSettings: AppSettings,
-  conversationSettings: ConversationSettings,
-): AppSettings {
-  return {
-    ...appSettings,
-    activeProviderId: conversationSettings.providerPresetId,
-    systemPrompt: "",
-    temperature: conversationSettings.temperature,
-    maxTokens: conversationSettings.maxTokens,
-    contextLimit: conversationSettings.contextLimit,
-    historyTurns: conversationSettings.historyTurns,
-    autoTrimContext: conversationSettings.autoTrimContext,
-    stream: conversationSettings.stream,
-    providerPresets: appSettings.providerPresets.map((preset) =>
-      preset.id === conversationSettings.providerPresetId
-        ? {
-            ...preset,
-            model: conversationSettings.model,
-            vision: conversationSettings.vision,
-          }
-        : preset,
-    ),
-  };
 }
 
 function newConversation(settings: AppSettings): Conversation {
@@ -451,10 +378,21 @@ export default function Home() {
   useEffect(() => {
     let active = true;
     Promise.resolve().then(async () => {
-      const savedSettings = loadSettings();
       const items = await listConversations();
       if (!active) return;
-      const normalizedItems = items.map((item) => normalizeConversation(item, savedSettings));
+      const migrated = migrateConversationModels(loadSettings(), items);
+      const savedSettings = migrated.settings;
+      const normalizedItems = migrated.conversations.map((item) => normalizeConversation(item, savedSettings));
+      try {
+        const changed = migrated.conversations.filter((item, index) => item !== items[index]);
+        if (changed.length) {
+          saveSettings(savedSettings);
+          await Promise.all(changed.map((item) => saveConversation(item, false)));
+        }
+      } catch {
+        setComposerError("로컬 저장 실패");
+      }
+      if (!active) return;
       const current = normalizedItems[0] || newConversation(savedSettings);
       const currentSettings = syncAppDefaults(savedSettings, current.settings);
       setSettings(currentSettings);
@@ -498,7 +436,7 @@ export default function Home() {
       (item) => item.id === conversation.settings.providerPresetId,
     ) || getActiveProvider(settings);
     return {
-      ...preset,
+      ...resolveProviderModel(preset, conversation.settings.modelPresetId),
       model: conversation.settings.model,
       vision: conversation.settings.vision,
     };
@@ -563,26 +501,8 @@ export default function Home() {
         Object.entries(current).filter(([id]) => !invalidated.includes(id)),
       ));
       settingsLiveRef.current = next;
-      if (settings.activeProviderId !== next.activeProviderId) {
-        const provider = next.providerPresets.find(
-          (preset) => preset.id === next.activeProviderId,
-        );
-        if (provider) {
-          applyConversationSettings({
-            ...conversation.settings,
-            providerPresetId: provider.id,
-            model: provider.model,
-            vision: provider.vision,
-            reasoning: resolvePresetReasoning(provider),
-          });
-        }
-      } else {
-        const previous = settings.providerPresets.find((preset) => preset.id === conversation.settings.providerPresetId);
-        const updated = next.providerPresets.find((preset) => preset.id === conversation.settings.providerPresetId);
-        if (updated && (updated.reasoning !== previous?.reasoning || updated.reasoningLevels !== previous?.reasoningLevels)) {
-          applyConversationSettings({ ...conversation.settings, reasoning: resolvePresetReasoning(updated) });
-        }
-      }
+      const nextConversationSettings = reconcileConversationModel(settings, next, conversation.settings);
+      if (nextConversationSettings !== conversation.settings) applyConversationSettings(nextConversationSettings);
       setSettings(next);
     },
     [applyConversationSettings, conversation.settings, settings],
@@ -593,16 +513,10 @@ export default function Home() {
     setSettings((current) => syncAppDefaults(current, next));
   }, [applyConversationSettings]);
 
-  const swapConversationProvider = useCallback((providerPresetId: string) => {
+  const swapConversationProvider = useCallback((providerPresetId: string, modelPresetId: string) => {
     const provider = settings.providerPresets.find((preset) => preset.id === providerPresetId);
     if (!provider) return;
-    changeConversationSettings({
-      ...conversation.settings,
-      providerPresetId: provider.id,
-      model: provider.model,
-      vision: provider.vision,
-      reasoning: resolvePresetReasoning(provider),
-    });
+    changeConversationSettings(selectConversationModel(conversation.settings, provider, modelPresetId));
   }, [changeConversationSettings, conversation.settings, settings.providerPresets]);
 
   const commitConversation = useCallback((next: Conversation) => {
@@ -948,12 +862,12 @@ export default function Home() {
     const providerPreset = settings.providerPresets.find(
       (item) => item.id === seedConversation.settings.providerPresetId,
     ) || getActiveProvider(settings);
-    const responseReasoning = resolvePresetReasoning(providerPreset, seedConversation.settings.reasoning.level);
     const responseProvider = {
-      ...providerPreset,
+      ...resolveProviderModel(providerPreset, seedConversation.settings.modelPresetId),
       model: seedConversation.settings.model,
       vision: seedConversation.settings.vision,
     };
+    const responseReasoning = resolvePresetReasoning(responseProvider, seedConversation.settings.reasoning.level);
     const contextPlan = planRequestContext(baseMessages, seedConversation.settings);
     const contextTrim: ContextTrimInfo | undefined = contextPlan.omittedMessages > 0
       ? {
@@ -1609,14 +1523,23 @@ export default function Home() {
           <div className="composer-settings" role="group" aria-label="모델 및 입력 설정">
             <select
               className="composer-preset-select"
-              value={conversation.settings.providerPresetId}
-              onChange={(event) => swapConversationProvider(event.target.value)}
+              value={JSON.stringify([conversation.settings.providerPresetId, conversation.settings.modelPresetId])}
+              onChange={(event) => {
+                const [providerId, modelId] = JSON.parse(event.target.value) as [string, string];
+                swapConversationProvider(providerId, modelId);
+              }}
               disabled={generating}
-              aria-label="API 프리셋 빠른 전환"
+              aria-label="모델 빠른 전환"
               title={`${activeProvider.name} · ${activeProvider.model}`}
             >
               {settings.providerPresets.map((preset) => (
-                <option key={preset.id} value={preset.id}>{preset.name}</option>
+                <optgroup key={preset.id} label={preset.name}>
+                  {preset.models.map((model) => (
+                    <option key={model.id} value={JSON.stringify([preset.id, model.id])}>
+                      {modelPresetLabel(preset, model)}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
             <label className="composer-reasoning">
