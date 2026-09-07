@@ -1,4 +1,9 @@
-import { parsePublicApiTarget, UPSTREAM_HEADER } from "../../../shared/proxy-target";
+import {
+  OPENCODE_CLIENT_HEADER,
+  OPENCODE_SESSION_HEADER,
+  parsePublicApiTarget,
+  UPSTREAM_HEADER,
+} from "../../../shared/proxy-target";
 import { assertPublicDns, TargetDnsError } from "./target-dns";
 
 const LEGACY_UPSTREAM = "https://integrate.api.nvidia.com/v1/chat/completions";
@@ -50,12 +55,15 @@ export default {
       const method = request.headers.get("Access-Control-Request-Method");
       const requestedHeaders = (request.headers.get("Access-Control-Request-Headers") || "")
         .toLowerCase().split(",").map((value) => value.trim()).filter(Boolean);
-      if (method !== "POST" || requestedHeaders.some((name) => !["authorization", "content-type", UPSTREAM_HEADER.toLowerCase()].includes(name))) {
+      const allowedHeaders = ["authorization", "content-type", UPSTREAM_HEADER,
+        OPENCODE_SESSION_HEADER, OPENCODE_CLIENT_HEADER].map((name) => name.toLowerCase());
+      if (method !== "POST" || requestedHeaders.some((name) => !allowedHeaders.includes(name))) {
         return errorResponse(403, "Preflight not allowed", origin);
       }
       const headers = responseHeaders(origin);
       headers.set("Access-Control-Allow-Methods", "POST, OPTIONS");
-      headers.set("Access-Control-Allow-Headers", `Authorization, Content-Type, ${UPSTREAM_HEADER}`);
+      headers.set("Access-Control-Allow-Headers",
+        `Authorization, Content-Type, ${UPSTREAM_HEADER}, ${OPENCODE_SESSION_HEADER}, ${OPENCODE_CLIENT_HEADER}`);
       headers.set("Access-Control-Max-Age", "86400");
       headers.set("Vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers");
       return new Response(null, { status: 204, headers });
@@ -74,6 +82,12 @@ export default {
       return errorResponse(401, "Invalid Authorization header", origin);
     }
     if (!request.body) return errorResponse(400, "Request body required", origin);
+    const openCodeSession = request.headers.get(OPENCODE_SESSION_HEADER) || "";
+    const openCodeClient = request.headers.get(OPENCODE_CLIENT_HEADER) || "";
+    if ((openCodeSession && (openCodeSession.length > 200 || !/^[\x21-\x7e]+$/.test(openCodeSession)))
+      || (openCodeClient && (openCodeClient.length > 100 || !/^[a-z0-9._-]+$/i.test(openCodeClient)))) {
+      return errorResponse(400, "Invalid session metadata", origin);
+    }
 
     let target: URL;
     try {
@@ -102,6 +116,10 @@ export default {
         method: "POST",
         headers: {
           ...(authorization ? { "Authorization": authorization } : {}),
+          ...(target.hostname === "opencode.ai" && openCodeSession
+            ? { [OPENCODE_SESSION_HEADER]: openCodeSession } : {}),
+          ...(target.hostname === "opencode.ai" && openCodeClient
+            ? { [OPENCODE_CLIENT_HEADER]: openCodeClient } : {}),
           "Content-Type": "application/json",
           "Accept": "application/json, text/event-stream",
           "Accept-Encoding": "identity",

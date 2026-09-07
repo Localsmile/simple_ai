@@ -81,7 +81,7 @@ export function reasoningOptions(config: ReasoningSettings): Record<string, unkn
 }
 
 export const PROTECTED_REQUEST_FIELDS = new Set([
-  "model", "messages", "input", "stream", "stream_options", "tools", "tool_choice", "n",
+  "model", "messages", "input", "system", "stream", "stream_options", "tools", "tool_choice", "n",
   "__proto__", "constructor", "prototype",
 ]);
 

@@ -5,7 +5,10 @@ import { loadTs, memoryStorage } from "./load-ts.mjs";
 const origin = "https://localsmile.github.io";
 const upstreamUrl = "https://integrate.api.nvidia.com/v1/chat/completions";
 const { DEFAULT_SETTINGS, DEFAULT_PROVIDER_PRESET, resolveProviderModel } = loadTs("app/types.ts");
-const { CORS_PROXY_URL, UPSTREAM_HEADER, resolveCompletionUrl, supportsCorsProxy, resolveChatUrl } = loadTs("app/lib/connection.ts");
+const {
+  CORS_PROXY_URL, OPENCODE_CLIENT_HEADER, OPENCODE_SESSION_HEADER, UPSTREAM_HEADER,
+  resolveCompletionTargets, resolveCompletionUrl, supportsCorsProxy, resolveChatUrl,
+} = loadTs("app/lib/connection.ts");
 const provider = { ...DEFAULT_PROVIDER_PRESET, ...resolveProviderModel(DEFAULT_PROVIDER_PRESET), baseUrl: upstreamUrl, connectionMode: "cors-proxy", apiKey: "test-key" };
 
 function request({ method = "POST", path = "/proxy/openai", headers = {}, ...options } = {}) {
@@ -46,6 +49,13 @@ test("proxy route supports custom public HTTPS providers and preserves query par
   assert.equal(resolveChatUrl("https://api.example.com/v1?resource=foo/"), "https://api.example.com/v1/chat/completions?resource=foo/");
   assert.equal(resolveChatUrl("https://api.example.com/v1/responses"), "https://api.example.com/v1/responses");
   assert.equal(supportsCorsProxy("https://api.example.com/v1/responses"), true);
+  assert.equal(resolveChatUrl("https://api.example.com/v1/messages"), "https://api.example.com/v1/messages");
+  assert.equal(supportsCorsProxy("https://api.example.com/v1/messages"), true);
+  assert.deepEqual(resolveCompletionTargets("https://api.example.com/v1/responses").map((item) => item.url), [
+    "https://api.example.com/v1/responses",
+    "https://api.example.com/v1/chat/completions",
+    "https://api.example.com/v1/messages",
+  ]);
   for (const baseUrl of ["https://other.test/v1", "http://api.example.com/v1", "https://api.example.com:444/v1",
     "https://user:pass@api.example.com/v1", `${upstreamUrl}#fragment`, "https://localhost/v1", "https://localhost./v1",
     "https://127.0.0.1/v1", "https://2130706433/v1", "https://0x7f000001/v1", "https://[::1]/v1",
@@ -73,11 +83,13 @@ test("preflight permits Pages and loopback, rejects untrusted and opaque origins
   const { call } = setup();
   for (const value of [origin, "http://localhost:5173", "http://127.0.0.1:5173", "http://[::1]:5173"]) {
     const response = await call(request({ method: "OPTIONS", headers: { Origin: value,
-      "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "authorization, Content-Type, x-upstream-url" } }));
+      "Access-Control-Request-Method": "POST",
+      "Access-Control-Request-Headers": "authorization, Content-Type, x-upstream-url, x-opencode-session, x-opencode-client" } }));
     assert.equal(response.status, 204);
     assert.equal(response.headers.get("Access-Control-Allow-Origin"), value);
     assert.match(response.headers.get("Access-Control-Allow-Headers"), /Authorization/);
     assert.match(response.headers.get("Access-Control-Allow-Headers"), /X-Upstream-Url/);
+    assert.match(response.headers.get("Access-Control-Allow-Headers"), /X-OpenCode-Session/);
     assert.equal(response.headers.has("Access-Control-Allow-Credentials"), false);
   }
   for (const value of ["https://evil.test", "http://localhost.evil.test:5173", "null", ""]) {
@@ -137,6 +149,26 @@ test("request and SSE bodies stream unchanged; cookies and unrelated headers are
   assert.equal((await reader.read()).done, true);
 });
 
+test("proxy forwards validated OpenCode session metadata only to OpenCode", async () => {
+  const captured = [];
+  const { call } = setup(async (url, init) => {
+    captured.push({ url, headers: init.headers });
+    return Response.json({ ok: true });
+  });
+  const metadata = { [OPENCODE_SESSION_HEADER]: "conversation_123", [OPENCODE_CLIENT_HEADER]: "simple-ai" };
+  assert.equal((await call(request({ headers: { ...metadata,
+    [UPSTREAM_HEADER]: "https://opencode.ai/zen/go/v1/messages" } }))).status, 200);
+  assert.equal(captured[0].headers[OPENCODE_SESSION_HEADER], "conversation_123");
+  assert.equal(captured[0].headers[OPENCODE_CLIENT_HEADER], "simple-ai");
+
+  assert.equal((await call(request({ headers: { ...metadata,
+    [UPSTREAM_HEADER]: "https://api.example.com/v1/messages" } }))).status, 200);
+  assert.equal(captured[1].headers[OPENCODE_SESSION_HEADER], undefined);
+  assert.equal(captured[1].headers[OPENCODE_CLIENT_HEADER], undefined);
+  assert.equal((await call(request({ headers: { ...metadata,
+    [OPENCODE_SESSION_HEADER]: "contains space" } }))).status, 400);
+});
+
 test("upstream errors remain visible with CORS; rate limits and redirects fail safely", async () => {
   const error = await setup(async () => new Response('{"error":{"message":"invalid key"}}', {
     status: 401, headers: { "Content-Type": "application/json", "Retry-After": "3" },
@@ -182,6 +214,107 @@ test("app routes JSON and SSE via proxy with unchanged payload and cancellation"
     assert.equal(body.chat_template_kwargs.thinking, false);
     assert.deepEqual(body.messages, [{ role: "user", content: "hello" }]);
   }
+});
+
+test("OpenCode sessions survive the proxy while unrelated providers receive no provider-specific headers", async () => {
+  const sessionId = "conversation_stable_123";
+  const openCodeTarget = "https://opencode.ai/zen/go/v1/responses";
+  const seen = [];
+  const { requestCompletion } = loadTs("app/lib/api.ts", { fetch: async (url, init) => {
+    seen.push({ url, headers: init.headers });
+    return Response.json({ id: "resp_session", status: "completed", output: [
+      { type: "message", content: [{ type: "output_text", text: "ok" }] },
+    ] });
+  } });
+  await requestCompletion({ settings: { ...DEFAULT_SETTINGS, stream: false }, sessionId,
+    provider: { ...provider, baseUrl: openCodeTarget }, messages: [{ role: "user", content: "hello" }] });
+  assert.equal(seen[0].headers.get(OPENCODE_SESSION_HEADER), sessionId);
+  assert.equal(seen[0].headers.get(OPENCODE_CLIENT_HEADER), "simple-ai");
+
+  await requestCompletion({ settings: { ...DEFAULT_SETTINGS, stream: false }, sessionId,
+    provider: { ...provider, model: "generic-session-test", baseUrl: "https://api.example.com/v1/responses" },
+    messages: [{ role: "user", content: "hello" }] });
+  assert.equal(seen[1].headers.has(OPENCODE_SESSION_HEADER), false);
+  assert.equal(seen[1].headers.has(OPENCODE_CLIENT_HEADER), false);
+});
+
+test("base endpoints negotiate standard API shapes without model-name rules and remember the result", async () => {
+  const calls = [];
+  const autoProvider = { ...provider, baseUrl: "https://opencode.ai/zen/go/v1", model: "future/model-2040" };
+  const { requestCompletion } = loadTs("app/lib/api.ts", { fetch: async (url, init) => {
+    const target = init.headers.get(UPSTREAM_HEADER);
+    calls.push({ target, body: JSON.parse(init.body), headers: init.headers });
+    if (!target.endsWith("/messages")) {
+      return Response.json({ error: { message: "unsupported request shape" } }, { status: 400 });
+    }
+    return Response.json({ id: "msg_auto", model: autoProvider.model, stop_reason: "end_turn",
+      content: [{ type: "text", text: "AUTO_OK" }], usage: { input_tokens: 3, output_tokens: 2 } });
+  } });
+  const options = { settings: { ...DEFAULT_SETTINGS, stream: false }, provider: autoProvider,
+    sessionId: "conversation_auto", messages: [{ role: "system", content: "system" },
+      { role: "user", content: "hello" }] };
+  const first = await requestCompletion(options);
+  assert.equal(first.content, "AUTO_OK");
+  assert.deepEqual(calls.map((call) => new URL(call.target).pathname), [
+    "/zen/go/v1/chat/completions", "/zen/go/v1/responses", "/zen/go/v1/messages",
+  ]);
+  assert.equal(calls.every((call) => call.headers.get(OPENCODE_SESSION_HEADER) === "conversation_auto"), true);
+  assert.equal(calls[2].body.system, "system");
+  assert.equal(calls[2].body.messages[0].role, "user");
+
+  await requestCompletion(options);
+  assert.equal(new URL(calls[3].target).pathname, "/zen/go/v1/messages");
+  assert.equal(calls.length, 4);
+});
+
+test("Messages endpoints preserve streaming thinking, tools, images and usage", async () => {
+  const endpoint = "https://api.example.com/v1/messages";
+  let sent;
+  const events = [
+    { type: "message_start", message: { id: "msg_1", model: "messages-model", usage: { input_tokens: 5 } } },
+    { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "think" } },
+    { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "signed" } },
+    { type: "content_block_stop", index: 0 },
+    { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "answer" } },
+    { type: "content_block_stop", index: 1 },
+    { type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "tool_1", name: "lookup", input: {} } },
+    { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: '{"q":"x"}' } },
+    { type: "content_block_stop", index: 2 },
+    { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 4 } },
+    { type: "message_stop" },
+  ];
+  const { requestCompletion, serializeCompletionRequest } = loadTs("app/lib/api.ts", {
+    fetch: async (url, init) => {
+      sent = JSON.parse(init.body);
+      return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+        { headers: { "Content-Type": "text/event-stream" } });
+    },
+  });
+  const responseProvider = { ...provider, baseUrl: endpoint, model: "messages-model" };
+  const deltas = [], thinking = [];
+  const result = await requestCompletion({ settings: { ...DEFAULT_SETTINGS, stream: true }, provider: responseProvider,
+    messages: [{ role: "system", content: "system" }, { role: "user", content: [
+      { type: "text", text: "hello" }, { type: "image_url", image_url: { url: "data:image/webp;base64,AA==" } },
+    ] }], tools: [{ type: "function", function: { name: "lookup", parameters: { type: "object" } } }],
+    onDelta: (value) => deltas.push(value), onReasoningDelta: (value) => thinking.push(value) });
+  assert.equal(sent.system, "system");
+  assert.equal(sent.messages[0].content[1].source.media_type, "image/webp");
+  assert.equal(sent.tools[0].input_schema.type, "object");
+  assert.deepEqual(sent.tool_choice, { type: "auto" });
+  assert.equal(result.content, "answer");
+  assert.equal(result.reasoning, "think");
+  assert.deepEqual(deltas, ["answer"]);
+  assert.deepEqual(thinking, ["think"]);
+  assert.deepEqual(result.toolCalls[0], { id: "tool_1", type: "function",
+    function: { name: "lookup", arguments: '{"q":"x"}' } });
+  assert.equal(result.usage.input, 5);
+  assert.equal(result.usage.output, 4);
+  const next = JSON.parse(serializeCompletionRequest(DEFAULT_SETTINGS, responseProvider,
+    [result.rawAssistantMessage, { role: "tool", tool_call_id: "tool_1", content: "result" }]));
+  assert.equal(next.messages[0].content[2].type, "tool_use");
+  assert.equal(next.messages[1].content[0].type, "tool_result");
 });
 
 test("Responses endpoints use the standard request, stream, usage and tool formats", async () => {

@@ -9,8 +9,11 @@ import type {
 import { mergeRequestOptions, reasoningOptions } from "./reasoning";
 import {
   completionApiForUrl,
+  isOpenCodeTarget,
   normalizeConnectionMode,
-  resolveChatUrl,
+  OPENCODE_CLIENT_HEADER,
+  OPENCODE_SESSION_HEADER,
+  resolveCompletionTargets,
   resolveCompletionUrl,
   UPSTREAM_HEADER,
   type CompletionApi,
@@ -53,6 +56,7 @@ export interface CompletionOptions {
   reasoning?: ReasoningSettings;
   messages: ApiMessage[];
   tools?: ApiTool[];
+  sessionId?: string;
   signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onReasoningDelta?: (delta: string) => void;
@@ -67,6 +71,7 @@ interface RawUsage {
   output_tokens?: number;
   prompt_cache_hit_tokens?: number;
   cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
   prompt_tokens_details?: { cached_tokens?: number };
   input_tokens_details?: { cached_tokens?: number };
   completion_tokens_details?: { reasoning_tokens?: number };
@@ -142,6 +147,35 @@ interface RawResponseEvent {
   message?: string;
   item?: RawResponseOutputItem;
   response?: RawResponsePayload;
+  error?: { message?: string } | string;
+}
+
+interface RawMessagesContentBlock extends Record<string, unknown> {
+  type?: string;
+  text?: string;
+  thinking?: string;
+  signature?: string;
+  id?: string;
+  name?: string;
+  input?: unknown;
+}
+
+interface RawMessagesPayload {
+  id?: string;
+  model?: string;
+  content?: RawMessagesContentBlock[];
+  stop_reason?: string | null;
+  usage?: RawUsage;
+  error?: { message?: string } | string;
+}
+
+interface RawMessagesEvent {
+  type?: string;
+  index?: number;
+  message?: RawMessagesPayload;
+  content_block?: RawMessagesContentBlock;
+  delta?: RawMessagesContentBlock & { stop_reason?: string | null; partial_json?: string };
+  usage?: RawUsage;
   error?: { message?: string } | string;
 }
 
@@ -366,6 +400,67 @@ function responsesTools(tools: ApiTool[]): Record<string, unknown>[] {
   }));
 }
 
+function messagesContent(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.map((part) => {
+    if (!part || typeof part !== "object") return part;
+    const item = part as Record<string, unknown>;
+    if (item.type === "image_url") {
+      const image = item.image_url as { url?: unknown } | undefined;
+      const url = typeof image?.url === "string" ? image.url : "";
+      const data = url.match(/^data:([^;,]+);base64,(.+)$/s);
+      return data
+        ? { type: "image", source: { type: "base64", media_type: data[1], data: data[2] } }
+        : { type: "image", source: { type: "url", url } };
+    }
+    return item;
+  });
+}
+
+function messagesRequest(messages: ApiMessage[]): { system?: string; messages: ApiMessage[] } {
+  const system = messages.filter((message) => message.role === "system")
+    .map((message) => readContent(message.content)).filter(Boolean).join("\n\n");
+  const output = messages.filter((message) => message.role !== "system").map((message) => {
+    if (message.role === "tool") {
+      return {
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: message.tool_call_id,
+          content: typeof message.content === "string" ? message.content : JSON.stringify(message.content),
+        }],
+      };
+    }
+    const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls as OpenAIToolCall[] : [];
+    const content = messagesContent(message.content);
+    if (!toolCalls.length) return { ...message, content };
+    const blocks = Array.isArray(content)
+      ? [...content]
+      : typeof content === "string" && content ? [{ type: "text", text: content }] : [];
+    return {
+      role: message.role,
+      content: [
+        ...blocks,
+        ...toolCalls.map((call) => {
+          let input: unknown = {};
+          try { input = JSON.parse(call.function.arguments || "{}"); }
+          catch { input = { value: call.function.arguments }; }
+          return { type: "tool_use", id: call.id, name: call.function.name, input };
+        }),
+      ],
+    };
+  });
+  return { ...(system ? { system } : {}), messages: output };
+}
+
+function messagesTools(tools: ApiTool[]): Record<string, unknown>[] {
+  return tools.map((tool) => ({
+    name: tool.function.name,
+    ...(tool.function.description ? { description: tool.function.description } : {}),
+    input_schema: tool.function.parameters,
+  }));
+}
+
 export function serializeCompletionRequest(
   settings: AppSettings,
   provider: CompletionProvider,
@@ -373,9 +468,10 @@ export function serializeCompletionRequest(
   tools?: ApiTool[],
   reasoning: ReasoningSettings = provider.reasoning,
   streamOverride?: boolean,
+  apiOverride?: CompletionApi,
 ): string {
   const stream = streamOverride ?? settings.stream;
-  const api = completionApiForUrl(provider.baseUrl);
+  const api = apiOverride || completionApiForUrl(provider.baseUrl);
   let extraBody: Record<string, unknown> = {};
   if (provider.extraBody.trim()) {
     let parsed: unknown;
@@ -390,6 +486,7 @@ export function serializeCompletionRequest(
     extraBody = parsed as Record<string, unknown>;
   }
 
+  const messagesPayload = api === "messages" ? messagesRequest(messages) : undefined;
   const body: Record<string, unknown> = api === "responses"
     ? {
         model: provider.model.trim(),
@@ -398,7 +495,15 @@ export function serializeCompletionRequest(
         max_output_tokens: settings.maxTokens,
         stream,
       }
-    : {
+    : api === "messages"
+      ? {
+        model: provider.model.trim(),
+        ...messagesPayload,
+        temperature: settings.temperature,
+        max_tokens: settings.maxTokens,
+        stream,
+      }
+      : {
         model: provider.model.trim(),
         messages,
         temperature: settings.temperature,
@@ -420,8 +525,9 @@ export function serializeCompletionRequest(
   if (stream && api === "chat-completions") body.stream_options = { include_usage: true };
   else if (streamOverride !== undefined) delete body.stream_options;
   if (tools?.length) {
-    body.tools = api === "responses" ? responsesTools(tools) : tools;
-    body.tool_choice = "auto";
+    body.tools = api === "responses" ? responsesTools(tools)
+      : api === "messages" ? messagesTools(tools) : tools;
+    body.tool_choice = api === "messages" ? { type: "auto" } : "auto";
   }
   return JSON.stringify(body);
 }
@@ -527,6 +633,167 @@ function parseJsonResponse(
   };
 }
 
+function messagesText(blocks: RawMessagesContentBlock[] = []): string {
+  return blocks.filter((block) => block.type === "text").map((block) => block.text || "").join("");
+}
+
+function messagesReasoning(blocks: RawMessagesContentBlock[] = []): string {
+  return blocks.filter((block) => block.type === "thinking").map((block) => block.thinking || "").join("");
+}
+
+function messagesToolCalls(blocks: RawMessagesContentBlock[] = []): OpenAIToolCall[] {
+  return blocks.filter((block) => block.type === "tool_use").map((block, index) => ({
+    id: block.id || `tool_${index}`,
+    type: "function" as const,
+    function: { name: block.name || "", arguments: JSON.stringify(block.input ?? {}) },
+  }));
+}
+
+function messagesFinishReason(reason?: string | null): string | undefined {
+  if (reason === "tool_use") return "tool_calls";
+  if (reason === "max_tokens") return "length";
+  if (reason === "end_turn" || reason === "stop_sequence") return "stop";
+  return reason || undefined;
+}
+
+function parseJsonMessages(
+  payload: RawMessagesPayload,
+  response: Response,
+  requestBytes: number,
+): CompletionResult {
+  if (payload.error) {
+    const message = typeof payload.error === "string"
+      ? payload.error : payload.error.message || JSON.stringify(payload.error);
+    throw new Error(`API 응답 오류: ${message}`);
+  }
+  const blocks = payload.content || [];
+  const content = messagesText(blocks);
+  const reasoning = messagesReasoning(blocks);
+  const toolCalls = messagesToolCalls(blocks);
+  return {
+    content,
+    reasoning: reasoning || undefined,
+    usage: normalizeUsage(payload.usage),
+    finishReason: messagesFinishReason(payload.stop_reason),
+    toolCalls,
+    rawAssistantMessage: { role: "assistant", content: blocks },
+    diagnostics: {
+      id: payload.id || response.headers.get("x-generation-id") || response.headers.get("x-request-id") || undefined,
+      model: payload.model,
+      requestBytes,
+    },
+  };
+}
+
+async function parseMessagesStream(
+  response: Response,
+  requestBytes: number,
+  onDelta?: (delta: string) => void,
+  onReasoningDelta?: (delta: string) => void,
+): Promise<CompletionResult> {
+  if (!response.body) throw new Error("API 응답 스트림 없음");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const blocks: RawMessagesContentBlock[] = [];
+  const partialInputs = new Map<number, string>();
+  let buffer = "";
+  let responseId = response.headers.get("x-generation-id") || response.headers.get("x-request-id") || undefined;
+  let responseModel: string | undefined;
+  let usage: TokenUsage | undefined;
+  let finishReason: string | undefined;
+  let receivedEvents = 0;
+  let malformedEvents = 0;
+
+  const processLine = (line: string) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) return;
+    const data = trimmed.slice(5).trim();
+    if (!data || data === "[DONE]") return;
+    let event: RawMessagesEvent;
+    try { event = JSON.parse(data) as RawMessagesEvent; }
+    catch { malformedEvents += 1; return; }
+    receivedEvents += 1;
+    if (event.type === "error" || event.error) {
+      const message = typeof event.error === "string"
+        ? event.error : event.error?.message || "알 수 없는 오류";
+      throw new Error(`API 스트림 오류: ${message}`);
+    }
+    if (event.type === "message_start" && event.message) {
+      responseId = event.message.id || responseId;
+      responseModel = event.message.model || responseModel;
+      usage = normalizeUsage(event.message.usage) || usage;
+    }
+    if (event.type === "content_block_start" && event.content_block) {
+      const index = event.index ?? blocks.length;
+      blocks[index] = { ...event.content_block };
+      if (event.content_block.type === "text" && event.content_block.text) onDelta?.(event.content_block.text);
+      if (event.content_block.type === "thinking" && event.content_block.thinking) {
+        onReasoningDelta?.(event.content_block.thinking);
+      }
+    }
+    if (event.type === "content_block_delta" && event.delta) {
+      const index = event.index ?? 0;
+      const block = blocks[index] ||= {};
+      if (event.delta.type === "text_delta" && event.delta.text) {
+        block.type ||= "text";
+        block.text = `${block.text || ""}${event.delta.text}`;
+        onDelta?.(event.delta.text);
+      }
+      if (event.delta.type === "thinking_delta" && event.delta.thinking) {
+        block.type ||= "thinking";
+        block.thinking = `${block.thinking || ""}${event.delta.thinking}`;
+        onReasoningDelta?.(event.delta.thinking);
+      }
+      if (event.delta.type === "signature_delta" && event.delta.signature) {
+        block.signature = `${block.signature || ""}${event.delta.signature}`;
+      }
+      if (event.delta.type === "input_json_delta" && event.delta.partial_json) {
+        partialInputs.set(index, `${partialInputs.get(index) || ""}${event.delta.partial_json}`);
+      }
+    }
+    if (event.type === "content_block_stop") {
+      const index = event.index ?? 0;
+      const partial = partialInputs.get(index);
+      if (partial && blocks[index]) {
+        try { blocks[index].input = JSON.parse(partial); }
+        catch { blocks[index].input = {}; }
+        partialInputs.delete(index);
+      }
+    }
+    if (event.type === "message_delta") {
+      finishReason = messagesFinishReason(event.delta?.stop_reason);
+      if (event.usage) {
+        const next = normalizeUsage(event.usage);
+        usage = next ? { ...usage, ...next, input: usage?.input || next.input,
+          total: (usage?.input || 0) + next.output } : usage;
+      }
+    }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() || "";
+    for (const line of lines) processLine(line);
+    if (done) break;
+  }
+  if (buffer) processLine(buffer);
+
+  const content = messagesText(blocks);
+  const reasoning = messagesReasoning(blocks);
+  const toolCalls = messagesToolCalls(blocks);
+  return {
+    content,
+    reasoning: reasoning || undefined,
+    usage,
+    finishReason: finishReason || (toolCalls.length ? "tool_calls" : undefined),
+    toolCalls,
+    rawAssistantMessage: { role: "assistant", content: blocks },
+    diagnostics: { id: responseId, model: responseModel, requestBytes, receivedEvents, malformedEvents },
+  };
+}
+
 async function parseResponsesStream(
   response: Response,
   requestBytes: number,
@@ -595,29 +862,41 @@ async function parseResponsesStream(
   };
 }
 
-async function requestCompletionOnce({
+const learnedCompletionApis = new Map<string, CompletionApi>();
+const NEGOTIABLE_STATUSES = new Set([400, 404, 405, 415, 422]);
+
+function completionCacheKey(provider: CompletionProvider): string {
+  return `${provider.baseUrl.trim()}\n${provider.model.trim()}`;
+}
+
+async function requestCompletionWithTarget({
   settings,
   provider,
   reasoning: reasoningSettings,
   messages,
   tools,
+  sessionId,
   signal,
   onDelta,
   onReasoningDelta,
-}: CompletionOptions, streamOverride?: boolean): Promise<CompletionResult> {
+}: CompletionOptions, target: { api: CompletionApi; url: string }, streamOverride?: boolean): Promise<CompletionResult> {
   const requestStream = streamOverride ?? settings.stream;
-  const api: CompletionApi = completionApiForUrl(provider.baseUrl);
-  const requestUrl = resolveCompletionUrl(provider);
+  const api = target.api;
+  const requestUrl = resolveCompletionUrl(provider, target.url);
   const useProxy = normalizeConnectionMode(provider.connectionMode) === "cors-proxy";
   const serializedBody = serializeCompletionRequest(
-    settings, provider, messages, tools, reasoningSettings, streamOverride,
+    settings, provider, messages, tools, reasoningSettings, streamOverride, api,
   );
   const requestBytes = new TextEncoder().encode(serializedBody).byteLength;
 
   const headers = new Headers({ "Content-Type": "application/json" });
-  if (useProxy) headers.set(UPSTREAM_HEADER, resolveChatUrl(provider.baseUrl));
+  if (useProxy) headers.set(UPSTREAM_HEADER, target.url);
   if (provider.apiKey.trim()) {
     headers.set("Authorization", `Bearer ${provider.apiKey.trim()}`);
+  }
+  if (sessionId && isOpenCodeTarget(target.url)) {
+    headers.set(OPENCODE_SESSION_HEADER, sessionId.slice(0, 200));
+    headers.set(OPENCODE_CLIENT_HEADER, "simple-ai");
   }
 
   let response: Response;
@@ -644,19 +923,22 @@ async function requestCompletionOnce({
 
   const contentType = response.headers.get("content-type") || "";
   if (!requestStream || !contentType.includes("text/event-stream")) {
-    let payload: RawCompletionPayload | RawResponsePayload;
+    let payload: RawCompletionPayload | RawResponsePayload | RawMessagesPayload;
     try {
       payload = (await response.json()) as RawCompletionPayload | RawResponsePayload;
     } catch {
       throw new Error("API 응답 형식 오류 · JSON 또는 SSE 필요");
     }
-    return api === "responses"
-      ? parseJsonResponse(payload as RawResponsePayload, response, requestBytes)
-      : parseJsonCompletion(payload as RawCompletionPayload, response, requestBytes);
+    if (api === "responses") return parseJsonResponse(payload as RawResponsePayload, response, requestBytes);
+    if (api === "messages") return parseJsonMessages(payload as RawMessagesPayload, response, requestBytes);
+    return parseJsonCompletion(payload as RawCompletionPayload, response, requestBytes);
   }
 
   if (api === "responses") {
     return parseResponsesStream(response, requestBytes, onDelta, onReasoningDelta);
+  }
+  if (api === "messages") {
+    return parseMessagesStream(response, requestBytes, onDelta, onReasoningDelta);
   }
 
   if (!response.body) throw new Error("API 응답 스트림 없음");
@@ -757,6 +1039,23 @@ async function requestCompletionOnce({
       malformedEvents,
     },
   };
+}
+
+async function requestCompletionOnce(options: CompletionOptions, streamOverride?: boolean): Promise<CompletionResult> {
+  const key = completionCacheKey(options.provider);
+  const targets = resolveCompletionTargets(options.provider.baseUrl, learnedCompletionApis.get(key));
+  let firstError: ApiRequestError | undefined;
+  for (const target of targets) {
+    try {
+      const result = await requestCompletionWithTarget(options, target, streamOverride);
+      learnedCompletionApis.set(key, target.api);
+      return result;
+    } catch (error) {
+      if (!(error instanceof ApiRequestError) || !NEGOTIABLE_STATUSES.has(error.status)) throw error;
+      firstError ||= error;
+    }
+  }
+  throw firstError || new Error("API 형식 자동 선택 실패");
 }
 
 function isUsableCompletion(result: CompletionResult): boolean {

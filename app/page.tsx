@@ -965,6 +965,7 @@ export default function Home() {
           reasoning: responseReasoning,
           messages: apiMessages,
           tools: apiTools,
+          sessionId: workingConversation.id,
           signal: abortController.signal,
           onDelta: (delta) => {
             accumulated += delta;

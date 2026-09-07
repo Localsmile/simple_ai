@@ -1,4 +1,4 @@
-# Chat Completions CORS 중계
+# API CORS 중계
 
 Simple AI의 GitHub Pages 클라이언트와 사용자 지정 OpenAI 호환 API 사이의 CORS 중계. 공급자별 고정 목록을 사용하지 않는다. 배포된 주소와 이전 클라이언트의 호환성을 위해 Worker 이름과 디렉터리는 `nvidia-proxy` 명칭을 유지한다.
 
@@ -6,11 +6,11 @@ Simple AI의 GitHub Pages 클라이언트와 사용자 지정 OpenAI 호환 API 
 
 - `GET /health`: 중계 상태 확인. 공급자 인증·추론 상태와는 별개다.
 - `OPTIONS /proxy/openai`: CORS 사전 요청.
-- `POST /proxy/openai`: `X-Upstream-Url` 헤더로 지정한 Chat Completions 또는 Responses 엔드포인트로 전달.
+- `POST /proxy/openai`: `X-Upstream-Url` 헤더로 지정한 Chat Completions, Responses 또는 Messages 엔드포인트로 전달.
 - 기존 `OPTIONS/POST /proxy/chat/completions`: 이전 클라이언트 호환 경로.
 - 기존 `OPTIONS/POST /v1/chat/completions`: 이전 클라이언트를 위해 NVIDIA의 고정 엔드포인트를 유지한다. 이 경로에서 대상 변경은 허용하지 않는다.
 
-대상은 공개 HTTPS 도메인, 기본 HTTPS 포트, `/chat/completions` 또는 `/responses`로 끝나는 경로만 허용한다. 대상의 쿼리 매개변수는 보존하며, Worker 자체 URL에는 쿼리를 허용하지 않는다. 대상 URL의 사용자명·비밀번호·fragment, IP 리터럴, 로컬·내부 도메인, 중계 자기 호출과 리다이렉트는 차단한다.
+대상은 공개 HTTPS 도메인, 기본 HTTPS 포트, `/chat/completions`, `/responses` 또는 `/messages`로 끝나는 경로만 허용한다. 대상의 쿼리 매개변수는 보존하며, Worker 자체 URL에는 쿼리를 허용하지 않는다. 대상 URL의 사용자명·비밀번호·fragment, IP 리터럴, 로컬·내부 도메인, 중계 자기 호출과 리다이렉트는 차단한다.
 
 매 요청마다 Cloudflare DoH로 A·AAAA를 병렬 확인하고 사설·예약·매핑 주소가 포함된 응답은 거부한다. DNS 확인 제한은 5초, DNS 응답당 최대 크기는 128KiB이다. DNS 실패 시 공급자로 요청을 보내지 않는다. DNS 조회에는 호스트명만 포함하며 API 키·경로·쿼리·본문은 포함하지 않는다.
 
@@ -18,7 +18,7 @@ DNS 사전 검사는 주소 고정(pinning)이 아니다. 실제 연결 경계�
 
 모델·추론·도구 호출 설정은 요청 JSON을 변경하지 않고 전달한다. 채팅 요청과 응답을 스트리밍하며 별도 버퍼링·자동 재시도·캐싱·저장은 하지 않는다. Workers Logs와 traces도 비활성화한다.
 
-각 요청의 Bearer API 키를 선택한 대상에 전달한다. API 키는 선택 사항이며, 공급자가 인증 여부를 결정한다. 공유 API 키나 Cloudflare 인증정보를 앱·Worker 소스에 포함하지 않는다. 원본 쿠키·Origin·중계 대상 헤더·임의 헤더는 공급자에 전달하지 않고, 응답 쿠키도 브라우저에 전달하지 않는다.
+각 요청의 Bearer API 키를 선택한 대상에 전달한다. API 키는 선택 사항이며, 공급자가 인증 여부를 결정한다. OpenCode 대상에는 검증된 `X-OpenCode-Session`과 `X-OpenCode-Client`만 추가 전달한다. 공유 API 키나 Cloudflare 인증정보를 앱·Worker 소스에 포함하지 않는다. 원본 쿠키·Origin·중계 대상 헤더·그 외 임의 헤더는 공급자에 전달하지 않고, 응답 쿠키도 브라우저에 전달하지 않는다.
 
 ## 접근과 사용량
 
