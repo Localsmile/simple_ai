@@ -7,6 +7,7 @@ import type {
   TokenUsage,
 } from "../types";
 import { mergeRequestOptions, reasoningOptions } from "./reasoning";
+import { imageCount, imageLimitFromError, limitHistoryImages } from "./image-context";
 import {
   completionApiForUrl,
   isOpenCodeTarget,
@@ -770,15 +771,20 @@ async function parseMessagesStream(
     }
   };
 
-  while (true) {
-    const { value, done } = await reader.read();
-    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() || "";
-    for (const line of lines) processLine(line);
-    if (done) break;
-  }
-  if (buffer) processLine(buffer);
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || "";
+      for (const line of lines) processLine(line);
+      if (done) break;
+    }
+    if (buffer) processLine(buffer);
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  } finally { reader.releaseLock(); }
 
   const content = messagesText(blocks);
   const reasoning = messagesReasoning(blocks);
@@ -843,15 +849,20 @@ async function parseResponsesStream(
       && event.response) finalResponse = event.response;
   };
 
-  while (true) {
-    const { value, done } = await reader.read();
-    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() || "";
-    for (const line of lines) processLine(line);
-    if (done) break;
-  }
-  if (buffer) processLine(buffer);
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || "";
+      for (const line of lines) processLine(line);
+      if (done) break;
+    }
+    if (buffer) processLine(buffer);
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  } finally { reader.releaseLock(); }
 
   const parsed = parseJsonResponse(finalResponse || { output: outputItems }, response, requestBytes);
   return {
@@ -863,6 +874,7 @@ async function parseResponsesStream(
 }
 
 const learnedCompletionApis = new Map<string, CompletionApi>();
+const learnedImageLimits = new Map<string, number>();
 const NEGOTIABLE_STATUSES = new Set([400, 404, 405, 415, 422]);
 
 function completionCacheKey(provider: CompletionProvider): string {
@@ -1008,15 +1020,20 @@ async function requestCompletionWithTarget({
     if (payload.usage) usage = normalizeUsage(payload.usage);
   };
 
-  while (true) {
-    const { value, done } = await reader.read();
-    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() || "";
-    for (const line of lines) processLine(line);
-    if (done) break;
-  }
-  if (buffer) processLine(buffer);
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || "";
+      for (const line of lines) processLine(line);
+      if (done) break;
+    }
+    if (buffer) processLine(buffer);
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  } finally { reader.releaseLock(); }
 
   return {
     content,
@@ -1047,10 +1064,29 @@ async function requestCompletionOnce(options: CompletionOptions, streamOverride?
   let firstError: ApiRequestError | undefined;
   for (const target of targets) {
     try {
-      const result = await requestCompletionWithTarget(options, target, streamOverride);
+      const imageKey = `${target.url}\n${options.provider.model.trim()}`;
+      const knownLimit = learnedImageLimits.get(imageKey);
+      let messages = knownLimit === undefined ? options.messages : limitHistoryImages(options.messages, knownLimit);
+      let result: CompletionResult | undefined;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        options.signal?.throwIfAborted();
+        try {
+          result = await requestCompletionWithTarget({ ...options, messages }, target, streamOverride);
+          break;
+        } catch (error) {
+          const limit = imageLimitFromError(error);
+          if (limit === undefined || limit >= imageCount(messages) || attempt === 2) throw error;
+          learnedImageLimits.set(imageKey, limit);
+          messages = limitHistoryImages(options.messages, limit);
+          options.signal?.throwIfAborted();
+          options.onRetry?.();
+        }
+      }
+      if (!result) throw new Error("API 이미지 제한 자동 처리 실패");
       learnedCompletionApis.set(key, target.api);
       return result;
     } catch (error) {
+      if (imageLimitFromError(error) !== undefined) throw error;
       if (!(error instanceof ApiRequestError) || !NEGOTIABLE_STATUSES.has(error.status)) throw error;
       firstError ||= error;
     }
