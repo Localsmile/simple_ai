@@ -16,13 +16,14 @@ import {
   Trash2,
   Wrench,
 } from "lucide-react";
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { ChatMessage } from "../types";
 import { MarkdownView } from "./MarkdownView";
 
 type MessageAction = (message: ChatMessage) => void | Promise<void>;
 type MessageIdAction = (messageId: string) => void | Promise<void>;
 type MessageVariantAction = (messageId: string, variantId: string) => void | Promise<void>;
+const MESSAGE_RENDER_BATCH = 30;
 
 interface MessageListProps {
   messages: ChatMessage[];
@@ -433,10 +434,34 @@ export const MessageList = memo(function MessageList({
   onReroll,
   onRemove,
 }: MessageListProps) {
+  const [visibleCount, setVisibleCount] = useState(MESSAGE_RENDER_BATCH);
+  const previousLength = useRef(messages.length);
+
+  useEffect(() => {
+    const priorLength = previousLength.current;
+    previousLength.current = messages.length;
+    if (messages.length > priorLength && visibleCount >= priorLength) {
+      setVisibleCount(messages.length);
+    }
+  }, [messages.length, visibleCount]);
+
+  const hiddenCount = Math.max(0, messages.length - visibleCount);
+  const visibleMessages = hiddenCount ? messages.slice(hiddenCount) : messages;
+
   return (
     <div className="message-list">
       <OpeningMessage content={openingMessage} imageWidth={imageWidth} wrapCodeBlocks={wrapCodeBlocks} />
-      {messages.map((message, index) => {
+      {hiddenCount > 0 && (
+        <button
+          type="button"
+          className="load-older-messages"
+          aria-label={`이전 메시지 ${Math.min(MESSAGE_RENDER_BATCH, hiddenCount)}개 표시`}
+          onClick={() => setVisibleCount((current) => Math.min(messages.length, current + MESSAGE_RENDER_BATCH))}
+        >
+          이전 메시지 {Math.min(MESSAGE_RENDER_BATCH, hiddenCount)}개
+        </button>
+      )}
+      {visibleMessages.map((message, index) => {
         const editing = editingMessageId === message.id;
         return (
           <MessageItem
@@ -448,7 +473,7 @@ export const MessageList = memo(function MessageList({
             editingContent={editing ? editingContent : ""}
             copied={copiedId === message.id}
             disabled={disabled}
-            hasFollowingMessages={index < messages.length - 1}
+            hasFollowingMessages={hiddenCount + index < messages.length - 1}
             onCopy={onCopy}
             onBeginEdit={onBeginEdit}
             onEditContentChange={onEditContentChange}

@@ -101,6 +101,9 @@ const markdownComponents: Components = {
     );
   },
 };
+const markdownPlugins = [remarkGfm];
+const highlightPlugins = [rehypeHighlight];
+const noRehypePlugins: [] = [];
 
 export const MarkdownView = memo(function MarkdownView({
   content,
@@ -118,8 +121,8 @@ export const MarkdownView = memo(function MarkdownView({
       style={{ "--markdown-image-width": `${normalizedImageWidth}%` } as CSSProperties}
     >
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlight]}
+        remarkPlugins={markdownPlugins}
+        rehypePlugins={content.length <= 50_000 ? highlightPlugins : noRehypePlugins}
         urlTransform={safeUrlTransform}
         components={markdownComponents}
       >

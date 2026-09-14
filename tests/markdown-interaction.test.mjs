@@ -139,3 +139,31 @@ test("message copy stays enabled during generation while mutation actions stay d
   assert.equal(copied, "partial answer");
   assert.ok(actions.filter((button) => button !== copy).every((button) => button.disabled));
 });
+
+test("long conversations render recent messages first and reveal older batches", async (t) => {
+  const { container, render } = surface(t);
+  const noop = () => {};
+  const messages = Array.from({ length: 75 }, (_, index) => ({
+    id: `message-${index + 1}`,
+    role: index % 2 ? "assistant" : "user",
+    content: `content ${index + 1}`,
+    createdAt: index + 1,
+  }));
+  await render(createElement(MessageList, {
+    messages, openingMessage: "", imageWidth: 100, wrapCodeBlocks: false,
+    editingMessageId: "", editingContent: "", copiedId: "", disabled: false,
+    onCopy: noop, onBeginEdit: noop, onEditContentChange: noop,
+    onCancelEdit: noop, onSaveEdit: noop, onBranch: noop, onSelectVariant: noop,
+    onUseReasoningAsContent: noop, onReroll: noop, onRemove: noop,
+  }));
+  assert.equal(container.querySelectorAll("article.message").length, 30);
+  assert.match(container.textContent, /content 75/);
+  assert.doesNotMatch(container.textContent, /content 45(?:\D|$)/);
+
+  const loadOlder = container.querySelector(".load-older-messages");
+  assert.match(loadOlder.textContent, /30/);
+  await act(async () => loadOlder.click());
+  assert.equal(container.querySelectorAll("article.message").length, 60);
+  assert.match(container.textContent, /content 16/);
+  assert.doesNotMatch(container.textContent, /content 15(?:\D|$)/);
+});

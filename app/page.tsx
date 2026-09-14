@@ -332,6 +332,13 @@ function readableError(error: unknown): string {
   return "알 수 없는 오류";
 }
 
+function streamPreviewDelay(contentLength: number): number {
+  if (contentLength >= 120_000) return 600;
+  if (contentLength >= 60_000) return 350;
+  if (contentLength >= 20_000) return 180;
+  return 80;
+}
+
 function useEventCallback<Args extends unknown[], Result>(
   callback: (...args: Args) => Result,
 ): (...args: Args) => Result {
@@ -943,6 +950,34 @@ export default function Home() {
     let toolEvents: ToolEvent[] = [];
     let finishReason: string | undefined;
     const completionRequestState = createCompletionRequestState();
+    let previewTimer: number | undefined;
+    let pendingPreview: { content: string; reasoning?: string } | undefined;
+    const discardPendingPreview = () => {
+      if (previewTimer !== undefined) window.clearTimeout(previewTimer);
+      previewTimer = undefined;
+      pendingPreview = undefined;
+    };
+    const flushPendingPreview = () => {
+      if (previewTimer !== undefined) window.clearTimeout(previewTimer);
+      previewTimer = undefined;
+      const preview = pendingPreview;
+      pendingPreview = undefined;
+      if (!preview) return;
+      updateAssistant(assistantMessage.id, (message) => ({
+        ...message,
+        content: preview.content,
+        reasoning: preview.reasoning,
+        toolEvents,
+      }));
+    };
+    const schedulePreview = (content: string, reasoning?: string) => {
+      pendingPreview = { content, reasoning };
+      if (previewTimer !== undefined) return;
+      previewTimer = window.setTimeout(
+        flushPendingPreview,
+        streamPreviewDelay(content.length + (reasoning?.length || 0)),
+      );
+    };
 
     try {
       if (contextPlan.overLimit) {
@@ -985,21 +1020,20 @@ export default function Home() {
           signal: abortController.signal,
           onDelta: (delta) => {
             accumulated += delta;
-            updateAssistant(assistantMessage.id, (message) => ({
-              ...message,
-              content: roundBase + accumulated.slice(roundBase.length),
-              toolEvents,
-            }));
+            schedulePreview(
+              roundBase + accumulated.slice(roundBase.length),
+              appendReasoning(reasoningRoundBase, roundReasoning) || undefined,
+            );
           },
           onReasoningDelta: (delta) => {
             roundReasoning += delta;
-            updateAssistant(assistantMessage.id, (message) => ({
-              ...message,
-              reasoning: appendReasoning(reasoningRoundBase, roundReasoning),
-              toolEvents,
-            }));
+            schedulePreview(
+              roundBase + accumulated.slice(roundBase.length),
+              appendReasoning(reasoningRoundBase, roundReasoning),
+            );
           },
           onRetry: () => {
+            discardPendingPreview();
             accumulated = roundBase;
             roundReasoning = "";
             updateAssistant(assistantMessage.id, (message) => ({
@@ -1041,6 +1075,7 @@ export default function Home() {
         accumulatedReasoning = appendReasoning(reasoningRoundBase, roundReasoning);
         usage = addUsage(usage, result.usage);
         finishReason = result.finishReason;
+        discardPendingPreview();
         updateAssistant(assistantMessage.id, (message) => ({
           ...message,
           content: accumulated,
@@ -1125,6 +1160,7 @@ export default function Home() {
       await recoverableSave;
       await saveConversation(finished);
     } catch (error) {
+      discardPendingPreview();
       const aborted = error instanceof DOMException && error.name === "AbortError";
       const failedResponse: ChatMessage = {
         ...assistantMessage,
@@ -1154,6 +1190,7 @@ export default function Home() {
       await recoverableSave;
       await saveConversation(failed);
     } finally {
+      discardPendingPreview();
       abortRef.current = null;
       setGenerating(false);
       window.setTimeout(() => textareaRef.current?.focus(), 0);
@@ -1503,6 +1540,7 @@ export default function Home() {
             </div>
           ) : (
             <MessageList
+              key={conversation.id}
               messages={conversation.messages}
               openingMessage={conversation.settings.openingMessage}
               imageWidth={settings.markdownImageWidth}

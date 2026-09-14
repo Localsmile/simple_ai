@@ -337,16 +337,23 @@ test("starts every new conversation with an empty system prompt", async () => {
 });
 
 test("isolates long message rendering from composer input updates", async () => {
-  const [page, messageList, markdown] = await Promise.all([
+  const [page, messageList, markdown, css] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("app/components/MessageList.tsx", root), "utf8"),
     readFile(new URL("app/components/MarkdownView.tsx", root), "utf8"),
+    readFile(new URL("app/globals.css", root), "utf8"),
   ]);
   assert.match(page, /function useEventCallback/);
   assert.match(page, /<MessageList/);
   assert.match(messageList, /memo\(function MessageItem/);
   assert.match(messageList, /memo\(function MessageList/);
+  assert.match(messageList, /MESSAGE_RENDER_BATCH = 30/);
+  assert.match(messageList, /messages\.slice\(hiddenCount\)/);
   assert.match(markdown, /memo\(function MarkdownView/);
+  assert.match(markdown, /content\.length <= 50_000/);
+  assert.match(page, /streamPreviewDelay/);
+  assert.match(page, /schedulePreview/);
+  assert.match(css, /content-visibility:\s*auto/);
 });
 
 test("keeps the composer writable while a response is streaming", async () => {
