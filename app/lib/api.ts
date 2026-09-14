@@ -7,7 +7,14 @@ import type {
   TokenUsage,
 } from "../types";
 import { mergeRequestOptions, reasoningOptions } from "./reasoning";
-import { imageCount, imageLimitFromError, limitHistoryImages } from "./image-context";
+import {
+  imageCount,
+  imageLimitFromError,
+  imagePartId,
+  latestUserOverflow,
+  limitHistoryImages,
+  taggedImagePart,
+} from "./image-context";
 import {
   completionApiForUrl,
   isOpenCodeTarget,
@@ -62,6 +69,22 @@ export interface CompletionOptions {
   onDelta?: (delta: string) => void;
   onReasoningDelta?: (delta: string) => void;
   onRetry?: () => void;
+  onImageBatch?: (completed: number, total: number) => void;
+  requestState?: CompletionRequestState;
+}
+
+interface ImageAnalysisNote {
+  text: string;
+  usage?: TokenUsage;
+  reported: boolean;
+}
+
+export interface CompletionRequestState {
+  imageNotes: Map<string, ImageAnalysisNote>;
+}
+
+export function createCompletionRequestState(): CompletionRequestState {
+  return { imageNotes: new Map() };
 }
 
 interface RawUsage {
@@ -305,10 +328,10 @@ export function buildApiMessages(
       role: "user",
       content: [
         { type: "text", text: text || "이미지 분석" },
-        ...images.map((attachment) => ({
-          type: "image_url",
-          image_url: { url: attachment.dataUrl, detail: "auto" },
-        })),
+        ...images.flatMap((attachment) => [
+          { type: "text", text: `[이미지 ID: ${attachment.id}]` },
+          taggedImagePart(attachment.id, attachment.dataUrl!),
+        ]),
       ],
     });
   }
@@ -877,6 +900,102 @@ const learnedCompletionApis = new Map<string, CompletionApi>();
 const learnedImageLimits = new Map<string, number>();
 const NEGOTIABLE_STATUSES = new Set([400, 404, 405, 415, 422]);
 
+function sumUsage(first?: TokenUsage, second?: TokenUsage): TokenUsage | undefined {
+  if (!first) return second;
+  if (!second) return first;
+  return {
+    input: first.input + second.input,
+    output: first.output + second.output,
+    total: first.total + second.total,
+    cached: first.cached + second.cached,
+    reasoning: (first.reasoning || 0) + (second.reasoning || 0),
+  };
+}
+
+export function knownImageLimit(provider: CompletionProvider): number | undefined {
+  return resolveCompletionTargets(provider.baseUrl, learnedCompletionApis.get(completionCacheKey(provider)))
+    .map((target) => learnedImageLimits.get(`${target.url}\n${provider.model.trim()}`))
+    .find((limit) => limit !== undefined);
+}
+
+function latestUserText(messages: ApiMessage[]): string {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === "user") return readContent(messages[index].content);
+  }
+  return "";
+}
+
+function appendImageNotes(messages: ApiMessage[], note: string): ApiMessage[] {
+  const output = [...messages];
+  for (let index = output.length - 1; index >= 0; index -= 1) {
+    const message = output[index];
+    if (message.role !== "user") continue;
+    const content = Array.isArray(message.content)
+      ? [...message.content, { type: "text", text: note }]
+      : [{ type: "text", text: String(message.content || "") }, { type: "text", text: note }];
+    output[index] = { ...message, content };
+    break;
+  }
+  return output;
+}
+
+async function messagesForImageLimit(
+  options: CompletionOptions,
+  target: { api: CompletionApi; url: string },
+  limit: number,
+  context: CompletionRequestState,
+): Promise<{ messages: ApiMessage[]; usage?: TokenUsage }> {
+  let messages = limitHistoryImages(options.messages, limit) as ApiMessage[];
+  const overflow = latestUserOverflow(options.messages, limit);
+  if (!overflow.length) return { messages };
+
+  const identifiers = overflow.map((part, index) => imagePartId(part) || `overflow-${index + 1}`);
+  const cacheKey = `${target.url}\n${options.provider.model.trim()}\n${identifiers.join("\n")}`;
+  let cached = context.imageNotes.get(cacheKey);
+  if (!cached) {
+    const notes: string[] = [];
+    let usage: TokenUsage | undefined;
+    const totalBatches = Math.ceil(overflow.length / limit);
+    for (let offset = 0; offset < overflow.length; offset += limit) {
+      options.signal?.throwIfAborted();
+      const batchIndex = Math.floor(offset / limit);
+      options.onImageBatch?.(batchIndex, totalBatches);
+      const batch = overflow.slice(offset, offset + limit);
+      const ids = batch.map((part, index) => imagePartId(part) || `image-${offset + index + 1}`);
+      const analysis = await requestCompletionWithTarget({
+        ...options,
+        messages: [{
+          role: "system",
+          content: "Inspect every provided image carefully. Produce factual visual notes for another model call that will answer the original request. Identify observations by image ID. Do not omit small text, spatial relationships, differences, or uncertainty relevant to the request.",
+        }, {
+          role: "user",
+          content: [
+            { type: "text", text: `Original request:\n${latestUserText(options.messages)}\n\nImages in this inspection batch:` },
+            ...batch.flatMap((part, index) => [
+              { type: "text", text: `[이미지 ID: ${ids[index]}]` },
+              part,
+            ]),
+          ],
+        }],
+        tools: undefined,
+        onDelta: undefined,
+        onReasoningDelta: undefined,
+        onRetry: undefined,
+      }, target, false);
+      const text = analysis.content.trim() || analysis.reasoning?.trim();
+      if (!text) throw new Error("추가 이미지 분석 결과 없음");
+      notes.push(`[${ids.join(", ")}]\n${text}`);
+      usage = sumUsage(usage, analysis.usage);
+      options.onImageBatch?.(batchIndex + 1, totalBatches);
+    }
+    cached = { text: notes.join("\n\n"), usage, reported: false };
+    context.imageNotes.set(cacheKey, cached);
+  }
+  messages = appendImageNotes(messages,
+    `[이번 요청에 앞서 별도 원본 확인을 마친 이미지 분석 기록]\n${cached.text}`);
+  return { messages, usage: cached.reported ? undefined : cached.usage };
+}
+
 function completionCacheKey(provider: CompletionProvider): string {
   return `${provider.baseUrl.trim()}\n${provider.model.trim()}`;
 }
@@ -1058,7 +1177,11 @@ async function requestCompletionWithTarget({
   };
 }
 
-async function requestCompletionOnce(options: CompletionOptions, streamOverride?: boolean): Promise<CompletionResult> {
+async function requestCompletionOnce(
+  options: CompletionOptions,
+  context: CompletionRequestState,
+  streamOverride?: boolean,
+): Promise<CompletionResult> {
   const key = completionCacheKey(options.provider);
   const targets = resolveCompletionTargets(options.provider.baseUrl, learnedCompletionApis.get(key));
   let firstError: ApiRequestError | undefined;
@@ -1066,23 +1189,26 @@ async function requestCompletionOnce(options: CompletionOptions, streamOverride?
     try {
       const imageKey = `${target.url}\n${options.provider.model.trim()}`;
       const knownLimit = learnedImageLimits.get(imageKey);
-      let messages = knownLimit === undefined ? options.messages : limitHistoryImages(options.messages, knownLimit);
+      let prepared = knownLimit === undefined
+        ? { messages: options.messages }
+        : await messagesForImageLimit(options, target, knownLimit, context);
       let result: CompletionResult | undefined;
       for (let attempt = 0; attempt < 3; attempt += 1) {
         options.signal?.throwIfAborted();
         try {
-          result = await requestCompletionWithTarget({ ...options, messages }, target, streamOverride);
+          result = await requestCompletionWithTarget({ ...options, messages: prepared.messages }, target, streamOverride);
           break;
         } catch (error) {
           const limit = imageLimitFromError(error);
-          if (limit === undefined || limit >= imageCount(messages) || attempt === 2) throw error;
+          if (limit === undefined || limit >= imageCount(prepared.messages) || attempt === 2) throw error;
           learnedImageLimits.set(imageKey, limit);
-          messages = limitHistoryImages(options.messages, limit);
+          prepared = await messagesForImageLimit(options, target, limit, context);
           options.signal?.throwIfAborted();
           options.onRetry?.();
         }
       }
       if (!result) throw new Error("API 이미지 제한 자동 처리 실패");
+      result = { ...result, usage: sumUsage(prepared.usage, result.usage) };
       learnedCompletionApis.set(key, target.api);
       return result;
     } catch (error) {
@@ -1138,8 +1264,13 @@ function logEmptyCompletion(
 }
 
 export async function requestCompletion(options: CompletionOptions): Promise<CompletionResult> {
-  const first = await requestCompletionOnce(options);
-  if (isUsableCompletion(first)) return first;
+  const context = options.requestState || createCompletionRequestState();
+  const complete = (result: CompletionResult) => {
+    context.imageNotes.forEach((note) => { note.reported = true; });
+    return result;
+  };
+  const first = await requestCompletionOnce(options, context);
+  if (isUsableCompletion(first)) return complete(first);
   if (!isRetryableEmptyCompletion(first)) {
     logEmptyCompletion(options, first);
     const kind = first.reasoning?.trim() ? "thinking만 수신" : "본문 없음";
@@ -1152,8 +1283,8 @@ export async function requestCompletion(options: CompletionOptions): Promise<Com
     onDelta: undefined,
     onReasoningDelta: undefined,
     onRetry: undefined,
-  }, false);
-  if (isUsableCompletion(second)) return second;
+  }, context, false);
+  if (isUsableCompletion(second)) return complete(second);
 
   logEmptyCompletion(options, first, second);
   throw new Error("API 빈 응답 · 자동 재시도 실패");

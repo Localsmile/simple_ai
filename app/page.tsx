@@ -36,13 +36,24 @@ import {
 import { MessageList } from "./components/MessageList";
 import { SettingsPanel } from "./components/SettingsPanel";
 import {
+  ApiRequestError,
   buildApiMessages,
+  createCompletionRequestState,
   isPayloadTooLargeError,
+  knownImageLimit,
   requestCompletion,
+  type ApiMessage,
+  type ApiTool,
 } from "./lib/api";
 import { planRequestContext } from "./lib/context";
 import { MAX_IMAGE_SOURCE_SIZE, optimizeImageToWebp } from "./lib/image";
-import { McpPool, mcpConnectionKey } from "./lib/mcp";
+import {
+  ConversationImageTools,
+  imageToolsSupported,
+  markImageToolsUnsupported,
+  type ImageToolResult,
+} from "./lib/image-tools";
+import { McpPool, mcpConnectionKey, type McpCallResult } from "./lib/mcp";
 import { configuredReasoningLevels, reasoningLevelLabel, resolvePresetReasoning } from "./lib/reasoning";
 import { enterSendsMessage, shouldSendMessage } from "./lib/input";
 import {
@@ -931,6 +942,7 @@ export default function Home() {
     let usage: TokenUsage = { input: 0, output: 0, total: 0, cached: 0, reasoning: 0 };
     let toolEvents: ToolEvent[] = [];
     let finishReason: string | undefined;
+    const completionRequestState = createCompletionRequestState();
 
     try {
       if (contextPlan.overLimit) {
@@ -953,18 +965,22 @@ export default function Home() {
             },
           )
         : null;
-      const apiTools = client?.toApiTools();
+      const mcpApiTools = client?.toApiTools() || [];
+      const imageTools = new ConversationImageTools(baseMessages, responseProvider, knownImageLimit);
+      let imageToolsEnabled = responseProvider.vision
+        && imageTools.available() && imageToolsSupported(responseProvider);
 
-      for (let round = 0; round < 5; round += 1) {
+      for (let round = 0; round < 8; round += 1) {
         const roundBase = accumulated;
         const reasoningRoundBase = accumulatedReasoning;
         let roundReasoning = "";
-        const result = await requestCompletion({
+        const runCompletion = (tools: ApiTool[]) => requestCompletion({
           settings: responseSettings,
           provider: responseProvider,
           reasoning: responseReasoning,
           messages: apiMessages,
-          tools: apiTools,
+          tools: tools.length ? tools : undefined,
+          requestState: completionRequestState,
           sessionId: workingConversation.id,
           signal: abortController.signal,
           onDelta: (delta) => {
@@ -993,7 +1009,33 @@ export default function Home() {
               toolEvents,
             }));
           },
+          onImageBatch: (completed, total) => {
+            const batchId = `image_batch_${assistantMessage.id}`;
+            const event: ToolEvent = {
+              id: batchId,
+              name: "이미지 묶음 분석",
+              status: completed >= total ? "done" : "running",
+              summary: `${completed}/${total}`,
+            };
+            toolEvents = toolEvents.some((item) => item.id === batchId)
+              ? toolEvents.map((item) => item.id === batchId ? event : item)
+              : [...toolEvents, event];
+            updateAssistant(assistantMessage.id, (message) => ({ ...message, toolEvents }));
+          },
         });
+        let result: Awaited<ReturnType<typeof requestCompletion>>;
+        try {
+          result = await runCompletion([
+            ...(imageToolsEnabled ? imageTools.toApiTools() : []),
+            ...mcpApiTools,
+          ]);
+        } catch (error) {
+          if (!imageToolsEnabled || !(error instanceof ApiRequestError)
+            || ![400, 422].includes(error.status)) throw error;
+          imageToolsEnabled = false;
+          result = await runCompletion(mcpApiTools);
+          markImageToolsUnsupported(responseProvider);
+        }
         accumulated = roundBase + result.content;
         roundReasoning = result.reasoning || roundReasoning;
         accumulatedReasoning = appendReasoning(reasoningRoundBase, roundReasoning);
@@ -1006,7 +1048,9 @@ export default function Home() {
           toolEvents,
         }));
 
-        if (!result.toolCalls.length || !client) break;
+        const handledCalls = result.toolCalls.filter((call) =>
+          (imageToolsEnabled && imageTools.handles(call)) || Boolean(client));
+        if (!handledCalls.length) break;
         apiMessages = [
           ...apiMessages,
           ...(result.rawAssistantMessages?.length
@@ -1014,16 +1058,21 @@ export default function Home() {
             : [result.rawAssistantMessage]),
         ];
 
-        for (const call of result.toolCalls) {
+        imageTools.beginRound();
+        const imageMessages: ApiMessage[] = [];
+        for (const call of handledCalls) {
+          const localImageTool = imageToolsEnabled && imageTools.handles(call);
           const event: ToolEvent = {
             id: call.id,
-            name: client.displayName(call),
+            name: localImageTool ? imageTools.displayName(call) : client!.displayName(call),
             status: "running",
           };
           toolEvents = [...toolEvents, event];
           updateAssistant(assistantMessage.id, (message) => ({ ...message, toolEvents }));
 
-          const toolResult = await client.callTool(call, abortController.signal);
+          const toolResult: ImageToolResult | McpCallResult = localImageTool
+            ? await imageTools.callTool(call, abortController.signal)
+            : await client!.callTool(call, abortController.signal);
           toolEvents = toolEvents.map((item) =>
             item.id === call.id
               ? {
@@ -1038,10 +1087,14 @@ export default function Home() {
             tool_call_id: call.id,
             content: toolResult.text,
           });
+          if ("imageMessage" in toolResult && toolResult.imageMessage) {
+            imageMessages.push(toolResult.imageMessage);
+          }
           updateAssistant(assistantMessage.id, (message) => ({ ...message, toolEvents }));
         }
+        apiMessages.push(...imageMessages);
 
-        if (round === 4) throw new Error("MCP 연속 실행 한도 도달 · 5라운드");
+        if (round === 7) throw new Error("도구 연속 실행 한도 도달 · 8라운드");
       }
 
       const completedResponse: ChatMessage = {

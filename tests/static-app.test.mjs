@@ -309,6 +309,23 @@ test("uses one shared image scale and renders user messages as markdown", async 
   assert.match(messageList, /message\.content && <MarkdownView content=\{message\.content\} imageWidth=\{imageWidth\}/);
 });
 
+test("conversation images can be inspected again through built-in model tools", async () => {
+  const [page, api, imageTools, imageContext] = await Promise.all([
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/lib/api.ts", root), "utf8"),
+    readFile(new URL("app/lib/image-tools.ts", root), "utf8"),
+    readFile(new URL("app/lib/image-context.ts", root), "utf8"),
+  ]);
+  assert.match(page, /new ConversationImageTools\(baseMessages/);
+  assert.match(page, /imageTools\.callTool/);
+  assert.match(page, /toolResult\.imageMessage/);
+  assert.match(api, /messagesForImageLimit/);
+  assert.match(api, /별도 원본 확인을 마친 이미지 분석 기록/);
+  assert.match(imageTools, /list_conversation_images/);
+  assert.match(imageTools, /inspect_conversation_images/);
+  assert.match(imageContext, /IMAGE_CONTEXT_ID = Symbol/);
+});
+
 test("starts every new conversation with an empty system prompt", async () => {
   const page = await readFile(new URL("app/page.tsx", root), "utf8");
   const models = await readFile(new URL("app/lib/models.ts", root), "utf8");

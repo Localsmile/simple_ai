@@ -70,7 +70,7 @@ test("image-count errors recover on the same endpoint in JSON and all three stre
   }
 });
 
-test("history reduction preserves every current image, tool exchanges, order and source objects", () => {
+test("history reduction keeps the newest allowed images, tool exchanges, order and source objects", () => {
   const { limitHistoryImages, imageCount } = loadTs("app/lib/image-context.ts");
   const messages = history();
   messages.at(-1).content.push(image(7));
@@ -85,7 +85,94 @@ test("history reduction preserves every current image, tool exchanges, order and
   const retained = limited.flatMap((m) => Array.isArray(m.content) ? m.content : [])
     .filter((part) => part.type === "image_url").map((part) => part.image_url.url);
   assert.deepEqual(retained, [4, 5, 6, 7].map((index) => image(index).image_url.url));
-  assert.throws(() => limitHistoryImages(messages, 1), /현재 첨부 이미지 2장/);
+  const one = limitHistoryImages(messages, 1);
+  assert.equal(imageCount(one), 1);
+  assert.match(JSON.stringify(one), /원본 제외/);
+});
+
+test("six images in the current prompt are inspected as 4 plus 2 before the final answer", async () => {
+  const calls = [];
+  let retries = 0;
+  const batchProgress = [];
+  const { buildApiMessages, createCompletionRequestState, requestCompletion } = loadTs("app/lib/api.ts", { fetch: async (_url, init) => {
+    const body = JSON.parse(init.body);
+    calls.push(body);
+    if (calls.length === 1) return Response.json({ error: { message: limitError } }, { status: 400 });
+    if (calls.length === 2) return Response.json({
+      choices: [{ message: { content: "details from images five and six" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 20, completion_tokens: 8 },
+    });
+    return Response.json({
+      choices: [{ message: { content: "combined final answer" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 30, completion_tokens: 10 },
+    });
+  } });
+  const attachments = Array.from({ length: 6 }, (_, index) => ({
+    id: `file_${index + 1}`, name: `${index + 1}.webp`, type: "image/webp", size: 10,
+    kind: "image", dataUrl: `data:image/webp;base64,${index + 1}`,
+  }));
+  const messages = buildApiMessages([{
+    id: "user_1", role: "user", content: "compare every image", attachments, createdAt: 1,
+  }], "", true);
+  const requestState = createCompletionRequestState();
+  const options = { settings: DEFAULT_SETTINGS, provider, messages, requestState,
+    onRetry: () => { retries += 1; },
+    onImageBatch: (completed, total) => batchProgress.push([completed, total]),
+  };
+  const result = await requestCompletion(options);
+  assert.equal(result.content, "combined final answer");
+  assert.equal(calls.length, 3);
+  assert.equal((JSON.stringify(calls[0]).match(/"type":"image_url"/g) || []).length, 6);
+  assert.equal((JSON.stringify(calls[1]).match(/"type":"image_url"/g) || []).length, 2);
+  assert.match(JSON.stringify(calls[1]), /file_5/);
+  assert.match(JSON.stringify(calls[1]), /file_6/);
+  assert.equal(calls[1].stream, false);
+  assert.equal((JSON.stringify(calls[2]).match(/"type":"image_url"/g) || []).length, 4);
+  assert.match(JSON.stringify(calls[2]), /details from images five and six/);
+  assert.match(JSON.stringify(calls[2]), /inspect_conversation_images/);
+  assert.equal(retries, 1);
+  assert.deepEqual(batchProgress, [[0, 1], [1, 1]]);
+  assert.deepEqual(result.usage, { input: 50, output: 18, total: 68, cached: 0, reasoning: 0 });
+
+  const nextRound = await requestCompletion(options);
+  assert.equal(nextRound.content, "combined final answer");
+  assert.equal(calls.length, 4);
+  assert.match(JSON.stringify(calls[3]), /details from images five and six/);
+  assert.deepEqual(batchProgress, [[0, 1], [1, 1]]);
+  assert.deepEqual(nextRound.usage, { input: 30, output: 10, total: 40, cached: 0, reasoning: 0 });
+});
+
+test("conversation image tools list stored images and reload only requested originals", async () => {
+  const { ConversationImageTools, LIST_IMAGES_TOOL, INSPECT_IMAGES_TOOL } = loadTs("app/lib/image-tools.ts");
+  const attachments = Array.from({ length: 5 }, (_, index) => ({
+    id: `stored_${index + 1}`, name: `${index + 1}.png`, type: "image/png", size: 10,
+    kind: "image", dataUrl: `data:image/png;base64,${index + 1}`,
+  }));
+  const session = new ConversationImageTools([{
+    id: "u", role: "user", content: "old product photos", attachments, createdAt: 1,
+  }], provider, () => 2);
+  assert.deepEqual(session.toApiTools().map((tool) => tool.function.name), [LIST_IMAGES_TOOL, INSPECT_IMAGES_TOOL]);
+  const listed = await session.callTool({ id: "list", type: "function",
+    function: { name: LIST_IMAGES_TOOL, arguments: '{"query":"product"}' } });
+  assert.equal(JSON.parse(listed.text).matches.length, 5);
+  assert.doesNotMatch(listed.text, /base64/);
+
+  session.beginRound();
+  const inspected = await session.callTool({ id: "inspect", type: "function",
+    function: { name: INSPECT_IMAGES_TOOL,
+      arguments: '{"image_ids":["stored_5","stored_2","stored_1"],"focus":"small label"}' } });
+  assert.equal(inspected.isError, false);
+  assert.match(inspected.text, /stored_1.*다음 도구 호출/);
+  assert.equal((JSON.stringify(inspected.imageMessage).match(/"type":"image_url"/g) || []).length, 2);
+  assert.match(JSON.stringify(inspected.imageMessage), /base64,5/);
+  assert.match(JSON.stringify(inspected.imageMessage), /base64,2/);
+  assert.match(JSON.stringify(inspected.imageMessage), /small label/);
+  assert.doesNotMatch(JSON.stringify(inspected.imageMessage), /base64,1/);
+
+  const exhausted = await session.callTool({ id: "again", type: "function",
+    function: { name: INSPECT_IMAGES_TOOL, arguments: '{"image_ids":["stored_1"]}' } });
+  assert.equal(exhausted.imageMessage, undefined);
+  assert.match(exhausted.text, /한도 도달/);
 });
 
 test("unrelated image errors never cause image removal; repeated count errors stop", async () => {
