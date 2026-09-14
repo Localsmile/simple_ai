@@ -28,6 +28,7 @@ interface MessageListProps {
   messages: ChatMessage[];
   openingMessage: string;
   imageWidth: number;
+  wrapCodeBlocks: boolean;
   editingMessageId: string;
   editingContent: string;
   copiedId: string;
@@ -88,11 +89,13 @@ const PendingResponse = memo(function PendingResponse({ startedAt }: { startedAt
 const ReasoningBlock = memo(function ReasoningBlock({
   reasoning,
   imageWidth,
+  wrapCodeBlocks,
   canUseAsContent,
   onUseAsContent,
 }: {
   reasoning: string;
   imageWidth: number;
+  wrapCodeBlocks: boolean;
   canUseAsContent: boolean;
   onUseAsContent: () => void;
 }) {
@@ -111,7 +114,7 @@ const ReasoningBlock = memo(function ReasoningBlock({
       </button>
       {open && (
         <div className="reasoning-content">
-          <MarkdownView content={reasoning} imageWidth={imageWidth} />
+          <MarkdownView content={reasoning} imageWidth={imageWidth} wrapCodeBlocks={wrapCodeBlocks} />
           {canUseAsContent && (
             <button className="reasoning-promote" type="button" onClick={onUseAsContent}>
               본문으로 사용
@@ -126,6 +129,7 @@ const ReasoningBlock = memo(function ReasoningBlock({
 interface MessageItemProps {
   message: ChatMessage;
   imageWidth: number;
+  wrapCodeBlocks: boolean;
   editing: boolean;
   editingContent: string;
   copied: boolean;
@@ -146,6 +150,7 @@ interface MessageItemProps {
 const MessageItem = memo(function MessageItem({
   message,
   imageWidth,
+  wrapCodeBlocks,
   editing,
   editingContent,
   copied,
@@ -240,6 +245,7 @@ const MessageItem = memo(function MessageItem({
           <ReasoningBlock
             reasoning={message.reasoning}
             imageWidth={imageWidth}
+            wrapCodeBlocks={wrapCodeBlocks}
             canUseAsContent={!message.content.trim() && Boolean(message.finishReason)}
             onUseAsContent={() => void onUseReasoningAsContent(message.id)}
           />
@@ -276,7 +282,7 @@ const MessageItem = memo(function MessageItem({
           </div>
         ) : message.role === "assistant" ? (
           message.content ? (
-            <MarkdownView content={message.content} imageWidth={imageWidth} />
+            <MarkdownView content={message.content} imageWidth={imageWidth} wrapCodeBlocks={wrapCodeBlocks} />
           ) : message.finishReason ? (
             <div className="empty-response-notice" role="status">
               <CircleAlert size={14} />
@@ -297,7 +303,7 @@ const MessageItem = memo(function MessageItem({
             <PendingResponse startedAt={message.createdAt} />
           )
         ) : (
-          message.content && <MarkdownView content={message.content} imageWidth={imageWidth} />
+          message.content && <MarkdownView content={message.content} imageWidth={imageWidth} wrapCodeBlocks={wrapCodeBlocks} />
         )}
 
         {(message.content || message.reasoning || message.finishReason || message.attachments?.length) && (
@@ -385,9 +391,11 @@ const MessageItem = memo(function MessageItem({
 const OpeningMessage = memo(function OpeningMessage({
   content,
   imageWidth,
+  wrapCodeBlocks,
 }: {
   content: string;
   imageWidth: number;
+  wrapCodeBlocks: boolean;
 }) {
   if (!content.trim()) return null;
   return (
@@ -399,7 +407,7 @@ const OpeningMessage = memo(function OpeningMessage({
         <header className="message-meta">
           <div className="message-author"><strong>시작 메시지</strong></div>
         </header>
-        <MarkdownView content={content} imageWidth={imageWidth} />
+        <MarkdownView content={content} imageWidth={imageWidth} wrapCodeBlocks={wrapCodeBlocks} />
       </div>
     </article>
   );
@@ -409,6 +417,7 @@ export const MessageList = memo(function MessageList({
   messages,
   openingMessage,
   imageWidth,
+  wrapCodeBlocks,
   editingMessageId,
   editingContent,
   copiedId,
@@ -426,7 +435,7 @@ export const MessageList = memo(function MessageList({
 }: MessageListProps) {
   return (
     <div className="message-list">
-      <OpeningMessage content={openingMessage} imageWidth={imageWidth} />
+      <OpeningMessage content={openingMessage} imageWidth={imageWidth} wrapCodeBlocks={wrapCodeBlocks} />
       {messages.map((message, index) => {
         const editing = editingMessageId === message.id;
         return (
@@ -434,6 +443,7 @@ export const MessageList = memo(function MessageList({
             key={message.id}
             message={message}
             imageWidth={imageWidth}
+            wrapCodeBlocks={wrapCodeBlocks}
             editing={editing}
             editingContent={editing ? editingContent : ""}
             copied={copiedId === message.id}

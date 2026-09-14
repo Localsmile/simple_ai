@@ -426,6 +426,7 @@ export function SettingsPanel({
                     <MarkdownView
                       content={conversationSettings.openingMessage}
                       imageWidth={settings.markdownImageWidth}
+                      wrapCodeBlocks={settings.wrapCodeBlocks}
                     />
                   </section>
                 )}
@@ -444,6 +445,18 @@ export function SettingsPanel({
                   onChange={(event) => update("markdownImageWidth", Number(event.target.value))}
                 />
                 <small>공용</small>
+              </label>
+
+              <label className="switch-row">
+                <span>
+                  <strong>코드 블록 자동 줄바꿈</strong>
+                  <small>표시만 줄바꿈 · 복사 원문 유지</small>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={settings.wrapCodeBlocks}
+                  onChange={(event) => update("wrapCodeBlocks", event.target.checked)}
+                />
               </label>
 
               <label className="field-group range-field">

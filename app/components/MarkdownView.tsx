@@ -105,13 +105,18 @@ const markdownComponents: Components = {
 export const MarkdownView = memo(function MarkdownView({
   content,
   imageWidth = 100,
+  wrapCodeBlocks = false,
 }: {
   content: string;
   imageWidth?: number;
+  wrapCodeBlocks?: boolean;
 }) {
   const normalizedImageWidth = Math.min(100, Math.max(30, imageWidth));
   return (
-    <div className="markdown-body" style={{ "--markdown-image-width": `${normalizedImageWidth}%` } as CSSProperties}>
+    <div
+      className={`markdown-body${wrapCodeBlocks ? " wrap-code-blocks" : ""}`}
+      style={{ "--markdown-image-width": `${normalizedImageWidth}%` } as CSSProperties}
+    >
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}

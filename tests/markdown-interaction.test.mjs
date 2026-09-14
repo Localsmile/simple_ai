@@ -89,6 +89,27 @@ test("each code block copies only its own text and survives image scale updates"
   assert.deepEqual(copied, ["second", "const a = 1;"]);
 });
 
+test("code wrapping changes only presentation and copies the original source", async (t) => {
+  const { container, render } = surface(t);
+  const source = "const veryLongValue = someObject.withAReallyLongPropertyName.withAnotherProperty;";
+  let copied;
+  clipboard(async (text) => { copied = text; });
+  const markdown = (wrapCodeBlocks) => createElement(MarkdownView, {
+    content: `\`\`\`js\n${source}\n\`\`\``, wrapCodeBlocks,
+  });
+
+  await render(markdown(true));
+  const body = container.querySelector(".markdown-body");
+  const button = container.querySelector(".code-copy");
+  assert.equal(body.classList.contains("wrap-code-blocks"), true);
+  await act(async () => button.click());
+  assert.equal(copied, source);
+
+  await render(markdown(false));
+  assert.equal(body.classList.contains("wrap-code-blocks"), false);
+  assert.equal(container.querySelector(".code-copy"), button);
+});
+
 test("a failed partial image URL can recover when streaming changes the URL", async (t) => {
   const { container, render } = surface(t);
   await render(createElement(MarkdownView, { content: "![picture](https://img.test/partial)" }));

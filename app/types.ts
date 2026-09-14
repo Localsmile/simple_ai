@@ -155,6 +155,7 @@ export interface AppSettings {
   autoTrimContext: boolean;
   stream: boolean;
   markdownImageWidth: number;
+  wrapCodeBlocks: boolean;
   theme: "dark" | "light";
   sendKey: SendKey;
   mcpEnabled: boolean;
@@ -225,6 +226,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoTrimContext: true,
   stream: true,
   markdownImageWidth: 100,
+  wrapCodeBlocks: false,
   theme: "dark",
   sendKey: "auto",
   mcpEnabled: true,

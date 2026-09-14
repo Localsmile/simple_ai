@@ -1453,6 +1453,7 @@ export default function Home() {
               messages={conversation.messages}
               openingMessage={conversation.settings.openingMessage}
               imageWidth={settings.markdownImageWidth}
+              wrapCodeBlocks={settings.wrapCodeBlocks}
               editingMessageId={editingMessageId}
               editingContent={editingContent}
               copiedId={copiedId}

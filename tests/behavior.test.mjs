@@ -424,6 +424,16 @@ test("fresh settings enable only web search without overriding saved opt-outs or
   assert.doesNotMatch(localStorage.getItem("simple-ai:settings"), /mcpToolLimit/);
 });
 
+test("code block wrapping is a persisted public display setting", () => {
+  const localStorage = memoryStorage(), sessionStorage = memoryStorage();
+  const { loadSettings, saveSettings } = loadTs("app/lib/storage.ts", { window: {}, localStorage, sessionStorage });
+  assert.equal(loadSettings().wrapCodeBlocks, false);
+  saveSettings({ ...loadSettings(), wrapCodeBlocks: true });
+  assert.equal(loadSettings().wrapCodeBlocks, true);
+  localStorage.setItem("simple-ai:settings", JSON.stringify({ wrapCodeBlocks: "invalid" }));
+  assert.equal(loadSettings().wrapCodeBlocks, false);
+});
+
 test("MCP exposes all selected tools beyond the former 24 and 128 limits", async () => {
   const names = Array.from({ length: 160 }, (_, i) => `tool_${i}`);
   const mock = mockMcp();

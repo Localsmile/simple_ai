@@ -1346,6 +1346,13 @@ a:focus-visible {
 
 .code-shell pre code { background: transparent !important; }
 
+.markdown-body.wrap-code-blocks .code-shell pre {
+  overflow-x: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .code-copy {
   position: absolute;
   z-index: 2;

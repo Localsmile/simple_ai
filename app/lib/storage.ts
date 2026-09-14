@@ -204,6 +204,8 @@ export function loadSettings(): AppSettings {
     markdownImageWidth: typeof saved.markdownImageWidth === "number"
       ? Math.min(100, Math.max(30, saved.markdownImageWidth))
       : DEFAULT_SETTINGS.markdownImageWidth,
+    wrapCodeBlocks: typeof saved.wrapCodeBlocks === "boolean"
+      ? saved.wrapCodeBlocks : DEFAULT_SETTINGS.wrapCodeBlocks,
   };
 }
 
