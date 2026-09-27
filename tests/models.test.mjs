@@ -31,6 +31,29 @@ function storage() {
     ...loadTs("app/lib/storage.ts", { window: {}, localStorage, sessionStorage }) };
 }
 
+test("new model token defaults and per-conversation author notes preserve existing settings", () => {
+  assert.equal(DEFAULT_MODEL_PRESET.maxTokens, 10000);
+  assert.equal(DEFAULT_MODEL_PRESET.contextLimit, 100000);
+  assert.equal(DEFAULT_SETTINGS.maxTokens, 10000);
+  assert.equal(DEFAULT_SETTINGS.contextLimit, 100000);
+  const app = fixture();
+  const saved = { ...conversationSettingsFromApp(app), authorNote: "Stay in character", authorNoteDepth: 3 };
+  const restored = normalizeConversationSettings(saved, app);
+  assert.equal(restored.authorNote, "Stay in character");
+  assert.equal(restored.authorNoteDepth, 3);
+  assert.equal(selectConversationModel(restored, app.providerPresets[0], "large").authorNote, saved.authorNote);
+  const fresh = conversationSettingsFromApp(app);
+  assert.equal(fresh.authorNote, "");
+  assert.equal(fresh.authorNoteDepth, 1);
+  assert.equal(normalizeConversationSettings({ ...saved, authorNoteDepth: -2 }, app).authorNoteDepth, 1);
+  assert.equal(app.providerPresets[0].models[0].maxTokens, 7000);
+  const { planRequestContext } = loadTs("app/lib/context.ts");
+  const prompt = [{ id: "u", role: "user", content: "question", createdAt: 1 }];
+  const withoutNote = planRequestContext(prompt, fresh).estimatedInputTokens;
+  const withNote = planRequestContext(prompt, { ...fresh, authorNote: "Detailed standing instruction" });
+  assert.ok(withNote.estimatedInputTokens > withoutNote);
+});
+
 test("provider owns one credential pair while independent model profiles survive storage", () => {
   const { localStorage, sessionStorage, saveSettings, loadSettings } = storage();
   const app = fixture();

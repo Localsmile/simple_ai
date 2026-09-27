@@ -72,6 +72,8 @@ export interface ConversationSettings {
   vision: boolean;
   systemPrompt: string;
   openingMessage: string;
+  authorNote: string;
+  authorNoteDepth: number;
   temperature: number;
   maxTokens: number;
   contextLimit: number;
@@ -190,8 +192,8 @@ export const DEFAULT_MODEL_PRESET: ModelPreset = {
   vision: false,
   extraBody: "",
   reasoning: DEFAULT_REASONING,
-  maxTokens: 4096,
-  contextLimit: 131072,
+  maxTokens: 10000,
+  contextLimit: 100000,
 };
 
 export const DEFAULT_PROVIDER_PRESET: ProviderPreset = {
@@ -220,8 +222,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   rememberCredentials: true,
   systemPrompt: "",
   temperature: 0.7,
-  maxTokens: 4096,
-  contextLimit: 131072,
+  maxTokens: 10000,
+  contextLimit: 100000,
   historyTurns: 20,
   autoTrimContext: true,
   stream: true,

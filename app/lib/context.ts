@@ -56,6 +56,7 @@ function estimateRequestContextTokens(
   return messages.reduce(
     (total, message) => total + estimateMessageTokens(message, settings.vision),
     estimateTextTokens(settings.systemPrompt)
+      + (settings.authorNote.trim() ? estimateTextTokens(settings.authorNote) + MESSAGE_OVERHEAD_TOKENS : 0)
       + (settings.openingMessage.trim()
         ? MESSAGE_OVERHEAD_TOKENS + estimateTextTokens(settings.openingMessage)
         : 0)
@@ -74,6 +75,7 @@ export function planRequestContext(
     : allTurns.slice(-Math.max(1, Math.floor(settings.historyTurns))).flat();
   const omittedByTurnLimit = requestMessages.length - turnLimitedMessages.length;
   const systemTokens = estimateTextTokens(settings.systemPrompt)
+    + (settings.authorNote.trim() ? estimateTextTokens(settings.authorNote) + MESSAGE_OVERHEAD_TOKENS : 0)
     + (settings.openingMessage.trim()
       ? MESSAGE_OVERHEAD_TOKENS + estimateTextTokens(settings.openingMessage)
       : 0)

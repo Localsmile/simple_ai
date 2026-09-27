@@ -415,9 +415,10 @@ export default function Home() {
       const currentSettings = syncAppDefaults(savedSettings, current.settings);
       setSettings(currentSettings);
       document.documentElement.dataset.theme = savedSettings.theme;
-      setHistory(normalizedItems);
+      setHistory(normalizedItems.length ? normalizedItems : [current]);
       setConversation(current);
       setHydrated(true);
+      if (!normalizedItems.length) void saveConversation(current);
     });
     return () => {
       active = false;
@@ -501,11 +502,9 @@ export default function Home() {
       if (exists) {
         return current.map((item) => item.id === nextConversation.id ? nextConversation : item);
       }
-      return nextSettings.openingMessage.trim() ? [nextConversation, ...current] : current;
+      return [nextConversation, ...current];
     });
-    if (nextConversation.messages.length || nextSettings.openingMessage.trim()) {
-      void saveConversation(nextConversation);
-    }
+    void saveConversation(nextConversation, false);
   }, [conversation]);
 
   const changeSettings = useCallback(
@@ -561,7 +560,8 @@ export default function Home() {
   const startNewConversation = () => {
     abortRef.current?.abort();
     const next = newConversation(settings);
-    setConversation(next);
+    commitConversation(next);
+    void saveConversation(next);
     cancelEditMessage();
     setInput("");
     setAttachments([]);
@@ -828,15 +828,6 @@ export default function Home() {
         )
       : conversation.messages.filter((message) => message.id !== messageId);
     cancelEditMessage();
-    if (!messages.length) {
-      await deleteConversation(conversation.id);
-      const nextHistory = history.filter((item) => item.id !== conversation.id);
-      setHistory(nextHistory);
-      const next = nextHistory[0] || newConversation(settings);
-      setConversation(next);
-      setSettings((current) => syncAppDefaults(current, next.settings));
-      return;
-    }
     const next: Conversation = {
       ...conversation,
       title: titleAfterMessageChange(conversation, messages),
@@ -943,6 +934,8 @@ export default function Home() {
       seedConversation.settings.systemPrompt,
       seedConversation.settings.vision,
       seedConversation.settings.openingMessage,
+      seedConversation.settings.authorNote,
+      seedConversation.settings.authorNoteDepth,
     );
     let accumulated = "";
     let accumulatedReasoning = "";

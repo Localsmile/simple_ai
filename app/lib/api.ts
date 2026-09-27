@@ -291,6 +291,8 @@ export function buildApiMessages(
   systemPrompt: string,
   visionEnabled: boolean,
   openingMessage = "",
+  authorNote = "",
+  authorNoteDepth = 1,
 ): ApiMessage[] {
   const apiMessages: ApiMessage[] = [];
   if (systemPrompt.trim()) {
@@ -299,6 +301,12 @@ export function buildApiMessages(
   if (openingMessage.trim()) {
     apiMessages.push({ role: "assistant", content: openingMessage.trim() });
   }
+
+  const userTurns = messages.filter((message) => message.role === "user" && !message.error);
+  const noteTarget = authorNote.trim() && userTurns.length
+    ? userTurns[Math.max(0, userTurns.length - 1 - Math.max(0, Math.floor(authorNoteDepth)))]
+    : undefined;
+  const noteBlock = `[작성자 메모]\n${authorNote.trim()}\n[/작성자 메모]`;
 
   for (const message of messages) {
     if (message.error) continue;
@@ -313,7 +321,8 @@ export function buildApiMessages(
     }
 
     const context = fileContext(message);
-    const text = [message.content, context].filter(Boolean).join("\n\n");
+    const text = [message.content, context, message === noteTarget ? noteBlock : ""]
+      .filter(Boolean).join("\n\n");
     const images = (message.attachments || []).filter(
       (attachment) =>
         attachment.kind === "image" && attachment.dataUrl && visionEnabled,

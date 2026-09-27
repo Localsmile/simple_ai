@@ -54,6 +54,21 @@ test("supports custom connection presets and message controls", async () => {
   assert.match(messageList, /분기/);
 });
 
+test("deleting the last message keeps its conversation and author note settings", async () => {
+  const [page, settings] = await Promise.all([
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/components/SettingsPanel.tsx", root), "utf8"),
+  ]);
+  const removal = page.match(/const removeMessage = async \(messageId: string\) => \{([\s\S]*?)\n  \};/)?.[1] || "";
+  assert.match(removal, /commitConversation\(next\)/);
+  assert.match(removal, /await saveConversation\(next\)/);
+  assert.doesNotMatch(removal, /deleteConversation\(/);
+  assert.match(page, /const startNewConversation = \(\) => \{[\s\S]*?commitConversation\(next\);\s*void saveConversation\(next\)/);
+  assert.match(settings, /updateConversation\("authorNote"/);
+  assert.match(settings, /updateConversation\("authorNoteDepth"/);
+  assert.match(page, /seedConversation\.settings\.authorNote/);
+});
+
 test("branches conversations at a selected message and renames saved titles", async () => {
   const [page, messageList] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
@@ -270,7 +285,7 @@ test("supports a per-conversation markdown opening message", async () => {
   const models = await readFile(new URL("app/lib/models.ts", root), "utf8");
   assert.match(models, /openingMessage:\s*""/);
   assert.match(page, /seedConversation\.settings\.openingMessage/);
-  assert.match(page, /nextSettings\.openingMessage\.trim\(\)/);
+  assert.match(page, /const applyConversationSettings = useCallback\([\s\S]*?void saveConversation\(nextConversation, false\)/);
   assert.match(api, /openingMessage = ""/);
   assert.match(api, /role: "assistant", content: openingMessage\.trim\(\)/);
   assert.match(planner, /estimateTextTokens\(settings\.openingMessage\)/);

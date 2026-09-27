@@ -413,6 +413,28 @@ export function SettingsPanel({
               </label>
 
               <div className="field-group">
+                <span className="field-label">작성자 메모</span>
+                <textarea
+                  value={conversationSettings.authorNote}
+                  onChange={(event) => updateConversation("authorNote", event.target.value)}
+                  placeholder="대화 중 유지할 지침"
+                  rows={5}
+                />
+                <small>매 요청에 한 번 삽입 · 대화 기록에는 표시되지 않음</small>
+              </div>
+
+              <label className="field-group">
+                <span className="field-label">메모 삽입 위치 · 최근 몇 턴 전</span>
+                <IntegerSettingInput
+                  key={`author-note-depth:${conversationId}:${conversationSettings.authorNoteDepth}`}
+                  value={conversationSettings.authorNoteDepth}
+                  minimum={0}
+                  onCommit={(value) => updateConversation("authorNoteDepth", value)}
+                />
+                <small>0: 현재 입력 · 1: 직전 턴 · 대화가 짧으면 첫 턴</small>
+              </label>
+
+              <div className="field-group">
                 <span className="field-label">시작 메시지</span>
                 <textarea
                   value={conversationSettings.openingMessage}

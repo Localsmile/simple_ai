@@ -69,6 +69,9 @@ export function normalizeConversationSettings(
     vision: typeof stored?.vision === "boolean" ? stored.vision : model.vision,
     systemPrompt: typeof stored?.systemPrompt === "string" ? stored.systemPrompt : app.systemPrompt,
     openingMessage: typeof stored?.openingMessage === "string" ? stored.openingMessage : "",
+    authorNote: typeof stored?.authorNote === "string" ? stored.authorNote : "",
+    authorNoteDepth: Number.isSafeInteger(stored?.authorNoteDepth) && Number(stored?.authorNoteDepth) >= 0
+      ? Number(stored?.authorNoteDepth) : 1,
     temperature: typeof stored?.temperature === "number" ? stored.temperature : app.temperature,
     maxTokens: model.maxTokens,
     contextLimit: model.contextLimit,
@@ -85,6 +88,7 @@ export function conversationSettingsFromApp(app: AppSettings): ConversationSetti
   const model = getProviderModel(provider);
   return normalizeConversationSettings({
     providerPresetId: provider.id, modelPresetId: model.id, systemPrompt: "", openingMessage: "",
+    authorNote: "", authorNoteDepth: 1,
   }, app);
 }
 

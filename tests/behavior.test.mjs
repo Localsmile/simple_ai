@@ -171,6 +171,27 @@ test("API history excludes empty assistant turns but keeps user and answered tur
   ]);
 });
 
+test("author note is inserted once at the selected turn without changing saved messages", () => {
+  const { buildApiMessages } = loadTs("app/lib/api.ts");
+  const messages = [
+    { id: "u1", role: "user", content: "first", createdAt: 1 },
+    { id: "a1", role: "assistant", content: "reply one", createdAt: 2 },
+    { id: "u2", role: "user", content: "second", createdAt: 3 },
+    { id: "a2", role: "assistant", content: "reply two", createdAt: 4 },
+    { id: "u3", role: "user", content: "third", createdAt: 5 },
+  ];
+  const original = structuredClone(messages);
+  const note = "Keep answers concise";
+  const request = buildApiMessages(messages, "system", false, "", note, 1);
+  assert.equal(request[0].role, "system");
+  assert.equal(request[3].content, "second\n\n[작성자 메모]\nKeep answers concise\n[/작성자 메모]");
+  assert.equal(request[5].content, "third");
+  assert.equal(JSON.stringify(request).split(note).length - 1, 1);
+  assert.equal(buildApiMessages(messages, "", false, "", note, 0).at(-1).content.includes(note), true);
+  assert.equal(buildApiMessages(messages, "", false, "", note, 99)[0].content.includes(note), true);
+  assert.deepEqual(messages, original);
+});
+
 test("preset reasoning keeps selectable levels, defaults and conversation overrides separate", () => {
   const { configuredReasoningLevels, resolvePresetReasoning } = loadTs("app/lib/reasoning.ts");
   const preset = { reasoning: { ...DEFAULT_REASONING, format: "thinking", level: "high" },
