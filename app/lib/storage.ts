@@ -13,6 +13,13 @@ const MCP_TOKEN_KEY = "simple-ai:mcp-token";
 const MCP_TOKENS_KEY = "simple-ai:mcp-tokens";
 const CREDENTIAL_DEFAULT_MIGRATION_KEY = "simple-ai:credential-default-v1";
 const MAX_CONVERSATIONS = 30;
+let conversationWrites: Promise<void> = Promise.resolve();
+
+function queueConversationWrite(action: () => Promise<void>): Promise<void> {
+  const pending = conversationWrites.then(action);
+  conversationWrites = pending.catch(() => undefined);
+  return pending;
+}
 
 interface LegacySettings {
   mcpToolLimit?: number;
@@ -47,18 +54,29 @@ function runTransaction<T>(
       new Promise<T>((resolve, reject) => {
         const transaction = database.transaction(STORE_NAME, mode);
         const request = action(transaction.objectStore(STORE_NAME));
-        request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
-        transaction.oncomplete = () => database.close();
+        transaction.oncomplete = () => {
+          database.close();
+          resolve(request.result);
+        };
+        transaction.onabort = () => {
+          database.close();
+          reject(transaction.error || request.error);
+        };
         transaction.onerror = () => reject(transaction.error);
       }),
   );
 }
 
-export async function listConversations(): Promise<Conversation[]> {
+async function readConversations(): Promise<Conversation[]> {
   if (typeof indexedDB === "undefined") return [];
   const rows = await runTransaction<Conversation[]>("readonly", (store) => store.getAll());
   return rows.sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+export async function listConversations(): Promise<Conversation[]> {
+  await conversationWrites;
+  return readConversations();
 }
 
 export async function saveConversation(
@@ -66,22 +84,23 @@ export async function saveConversation(
   pruneHistory = true,
 ): Promise<void> {
   if (typeof indexedDB === "undefined") return;
-  await runTransaction("readwrite", (store) => store.put(conversation));
-  if (!pruneHistory) return;
-
-  const conversations = await listConversations();
-  const overflow = conversations.slice(MAX_CONVERSATIONS);
-  await Promise.all(overflow.map((item) => deleteConversation(item.id)));
+  return queueConversationWrite(async () => {
+    await runTransaction("readwrite", (store) => store.put(conversation));
+    if (!pruneHistory) return;
+    const conversations = await readConversations();
+    const overflow = conversations.slice(MAX_CONVERSATIONS);
+    await Promise.all(overflow.map((item) => runTransaction("readwrite", (store) => store.delete(item.id))));
+  });
 }
 
 export async function deleteConversation(id: string): Promise<void> {
   if (typeof indexedDB === "undefined") return;
-  await runTransaction("readwrite", (store) => store.delete(id));
+  return queueConversationWrite(async () => { await runTransaction("readwrite", (store) => store.delete(id)); });
 }
 
 export async function clearConversations(): Promise<void> {
   if (typeof indexedDB === "undefined") return;
-  await runTransaction("readwrite", (store) => store.clear());
+  return queueConversationWrite(async () => { await runTransaction("readwrite", (store) => store.clear()); });
 }
 
 function readJson<T>(storage: Storage, key: string, fallback: T): T {

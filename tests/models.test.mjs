@@ -9,7 +9,28 @@ const {
 const {
   conversationSettingsFromApp, selectConversationModel, normalizeConversationSettings,
   reconcileConversationModel, migrateConversationModels, syncAppDefaults, normalizeModel,
+  mergeGeneratedConversation,
 } = loadTs("app/lib/models.ts");
+
+test("generation completion preserves edits made to prompts and the title while streaming", () => {
+  const generated = {
+    id: "chat", title: "original", titleEdited: false, createdAt: 1, updatedAt: 10,
+    settings: conversationSettingsFromApp(fixture()),
+    messages: [{ id: "answer", role: "assistant", content: "finished answer", createdAt: 2 }],
+  };
+  const latest = {
+    ...generated, title: "renamed", titleEdited: true,
+    settings: { ...generated.settings, systemPrompt: "latest prompt", authorNote: "latest note", authorNoteDepth: 4 },
+    messages: [{ ...generated.messages[0], content: "partial" }],
+  };
+  const completed = mergeGeneratedConversation(generated, latest);
+  assert.equal(completed.settings, latest.settings);
+  assert.equal(completed.title, "renamed");
+  assert.equal(completed.titleEdited, true);
+  assert.equal(completed.messages, generated.messages);
+  assert.equal(completed.updatedAt, 10);
+  assert.equal(mergeGeneratedConversation(generated, { ...latest, id: "other" }), generated);
+});
 
 function fixture() {
   const models = [

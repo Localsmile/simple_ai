@@ -57,7 +57,7 @@ import { McpPool, mcpConnectionKey, type McpCallResult } from "./lib/mcp";
 import { configuredReasoningLevels, reasoningLevelLabel, resolvePresetReasoning } from "./lib/reasoning";
 import { enterSendsMessage, shouldSendMessage } from "./lib/input";
 import {
-  conversationSettingsFromApp, migrateConversationModels, modelPresetLabel,
+  conversationSettingsFromApp, mergeGeneratedConversation, migrateConversationModels, modelPresetLabel,
   normalizeConversationSettings, reconcileConversationModel, selectConversationModel, syncAppDefaults,
 } from "./lib/models";
 import {
@@ -67,6 +67,7 @@ import {
   saveConversation,
   saveSettings,
 } from "./lib/storage";
+import { useLiveState } from "./lib/use-live-state";
 import type {
   AppSettings,
   Attachment,
@@ -352,8 +353,8 @@ function useEventCallback<Args extends unknown[], Result>(
 export default function Home() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [hydrated, setHydrated] = useState(false);
-  const [history, setHistory] = useState<Conversation[]>([]);
-  const [conversation, setConversation] = useState<Conversation>(() => newConversation(DEFAULT_SETTINGS));
+  const [history, setHistory, historyLiveRef] = useLiveState<Conversation[]>([]);
+  const [conversation, setConversation, conversationLiveRef] = useLiveState<Conversation>(() => newConversation(DEFAULT_SETTINGS));
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [optimizingImages, setOptimizingImages] = useState(false);
@@ -423,7 +424,7 @@ export default function Home() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [setConversation, setHistory]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -491,10 +492,13 @@ export default function Home() {
     [conversation.messages],
   );
 
-  const applyConversationSettings = useCallback((nextSettings: ConversationSettings) => {
+  const applyConversationSettings = useCallback((changes: Partial<ConversationSettings>) => {
+    const currentConversation = conversationLiveRef.current;
+    if (Object.entries(changes).every(([key, value]) =>
+      currentConversation.settings[key as keyof ConversationSettings] === value)) return currentConversation;
     const nextConversation = {
-      ...conversation,
-      settings: nextSettings,
+      ...currentConversation,
+      settings: { ...currentConversation.settings, ...changes },
     };
     setConversation(nextConversation);
     setHistory((current) => {
@@ -505,11 +509,14 @@ export default function Home() {
       return [nextConversation, ...current];
     });
     void saveConversation(nextConversation, false);
-  }, [conversation]);
+    return nextConversation;
+  }, [conversationLiveRef, setConversation, setHistory]);
 
   const changeSettings = useCallback(
     (next: AppSettings) => {
-      const invalidated = settings.mcpServers.filter((server) => {
+      const previousSettings = settingsLiveRef.current;
+      const currentConversation = conversationLiveRef.current;
+      const invalidated = previousSettings.mcpServers.filter((server) => {
         const replacement = next.mcpServers.find((item) => item.id === server.id);
         return !replacement || mcpConnectionKey(server) !== mcpConnectionKey(replacement);
       }).map((server) => server.id);
@@ -518,23 +525,23 @@ export default function Home() {
         Object.entries(current).filter(([id]) => !invalidated.includes(id)),
       ));
       settingsLiveRef.current = next;
-      const nextConversationSettings = reconcileConversationModel(settings, next, conversation.settings);
-      if (nextConversationSettings !== conversation.settings) applyConversationSettings(nextConversationSettings);
+      const nextConversationSettings = reconcileConversationModel(previousSettings, next, currentConversation.settings);
+      if (nextConversationSettings !== currentConversation.settings) applyConversationSettings(nextConversationSettings);
       setSettings(next);
     },
-    [applyConversationSettings, conversation.settings, settings],
+    [applyConversationSettings, conversationLiveRef],
   );
 
-  const changeConversationSettings = useCallback((next: ConversationSettings) => {
-    applyConversationSettings(next);
-    setSettings((current) => syncAppDefaults(current, next));
+  const changeConversationSettings = useCallback((changes: Partial<ConversationSettings>) => {
+    const next = applyConversationSettings(changes);
+    setSettings((current) => syncAppDefaults(current, next.settings));
   }, [applyConversationSettings]);
 
   const swapConversationProvider = useCallback((providerPresetId: string, modelPresetId: string) => {
-    const provider = settings.providerPresets.find((preset) => preset.id === providerPresetId);
+    const provider = settingsLiveRef.current.providerPresets.find((preset) => preset.id === providerPresetId);
     if (!provider) return;
-    changeConversationSettings(selectConversationModel(conversation.settings, provider, modelPresetId));
-  }, [changeConversationSettings, conversation.settings, settings.providerPresets]);
+    changeConversationSettings(selectConversationModel(conversationLiveRef.current.settings, provider, modelPresetId));
+  }, [changeConversationSettings, conversationLiveRef]);
 
   const commitConversation = useCallback((next: Conversation) => {
     setConversation(next);
@@ -542,19 +549,31 @@ export default function Home() {
       const without = current.filter((item) => item.id !== next.id);
       return [next, ...without].sort((a, b) => b.updatedAt - a.updatedAt);
     });
-  }, []);
+  }, [setConversation, setHistory]);
+
+  const commitGeneratedConversation = useCallback((generated: Conversation) => {
+    const active = conversationLiveRef.current;
+    const latest = active.id === generated.id ? active
+      : historyLiveRef.current.find((item) => item.id === generated.id);
+    if (!latest) return undefined;
+    const next = mergeGeneratedConversation(generated, latest);
+    if (active.id === next.id) setConversation(next);
+    setHistory((current) => [next, ...current.filter((item) => item.id !== next.id)]
+      .sort((a, b) => b.updatedAt - a.updatedAt));
+    return next;
+  }, [conversationLiveRef, historyLiveRef, setConversation, setHistory]);
 
   const updateAssistant = useCallback(
     (assistantId: string, updater: (message: ChatMessage) => ChatMessage) => {
-      setConversation((current) => ({
+      setConversation((current) => current.messages.some((message) => message.id === assistantId) ? ({
         ...current,
         messages: current.messages.map((message) =>
           message.id === assistantId ? updater(message) : message,
         ),
         updatedAt: Date.now(),
-      }));
+      }) : current);
     },
-    [],
+    [setConversation],
   );
 
   const startNewConversation = () => {
@@ -573,7 +592,10 @@ export default function Home() {
 
   const selectConversation = (item: Conversation) => {
     if (generating) abortRef.current?.abort();
-    const next = normalizeConversation(item, settings);
+    const next = normalizeConversation(
+      historyLiveRef.current.find((current) => current.id === item.id) || item,
+      settingsLiveRef.current,
+    );
     setConversation(next);
     setSettings((current) => syncAppDefaults(current, next.settings));
     void saveConversation(next);
@@ -1144,14 +1166,13 @@ export default function Home() {
             activeResponseVariantId: completedVariant.id,
           }
         : completedResponse;
-      const finished: Conversation = {
+      await recoverableSave;
+      const finished = commitGeneratedConversation({
         ...workingConversation,
         updatedAt: timestamp(),
         messages: [...baseMessages, finishedAssistant],
-      };
-      commitConversation(finished);
-      await recoverableSave;
-      await saveConversation(finished);
+      });
+      if (finished) await saveConversation(finished);
     } catch (error) {
       discardPendingPreview();
       const aborted = error instanceof DOMException && error.name === "AbortError";
@@ -1174,14 +1195,13 @@ export default function Home() {
             activeResponseVariantId: failedVariant.id,
           }
         : failedResponse;
-      const failed: Conversation = {
+      await recoverableSave;
+      const failed = commitGeneratedConversation({
         ...workingConversation,
         updatedAt: timestamp(),
         messages: [...baseMessages, failedAssistant],
-      };
-      commitConversation(failed);
-      await recoverableSave;
-      await saveConversation(failed);
+      });
+      if (failed) await saveConversation(failed);
     } finally {
       discardPendingPreview();
       abortRef.current = null;
@@ -1200,9 +1220,10 @@ export default function Home() {
       attachments,
       createdAt: timestamp(),
     };
-    const baseMessages = [...conversation.messages, userMessage];
+    const currentConversation = conversationLiveRef.current;
+    const baseMessages = [...currentConversation.messages, userMessage];
     const seedConversation: Conversation = {
-      ...conversation,
+      ...currentConversation,
       messages: baseMessages,
     };
     setInput("");
@@ -1638,7 +1659,6 @@ export default function Home() {
               <select value={conversationReasoning.level} disabled={generating}
                 aria-label="추론 레벨" title="추론 레벨"
                 onChange={(event) => applyConversationSettings({
-                  ...conversation.settings,
                   reasoning: resolvePresetReasoning(activeProvider, event.target.value as ReasoningLevel),
                 })}>
                 {reasoningLevels.map((level) => <option value={level} key={level}>
@@ -1649,7 +1669,7 @@ export default function Home() {
             <button type="button" className={`vision-toggle ${activeProvider.vision ? "on" : ""}`}
               aria-label="이미지 입력" aria-pressed={activeProvider.vision} disabled={generating}
               title={`이미지 입력 ${activeProvider.vision ? "켜짐" : "꺼짐"}`}
-              onClick={() => changeConversationSettings({ ...conversation.settings, vision: !activeProvider.vision })}>
+              onClick={() => changeConversationSettings({ vision: !activeProvider.vision })}>
               <ImageIcon size={13} />
               <span>이미지 <strong>{activeProvider.vision ? "ON" : "OFF"}</strong></span>
             </button>

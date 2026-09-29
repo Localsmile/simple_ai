@@ -7,7 +7,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type {
   AppSettings,
   ConversationSettings,
@@ -31,7 +31,7 @@ interface SettingsPanelProps {
   conversationSettings: ConversationSettings;
   mcpConnections: Record<string, McpConnectionState>;
   onChange: (settings: AppSettings) => void;
-  onConversationChange: (settings: ConversationSettings) => void;
+  onConversationChange: (changes: Partial<ConversationSettings>) => void;
   onClose: () => void;
   onConnectMcp: (id: string) => void;
 }
@@ -53,8 +53,8 @@ function IntegerSettingInput({
 }: IntegerSettingInputProps) {
   const [draft, setDraft] = useState(String(value));
 
-  const commit = () => {
-    const parsed = Number(draft.trim());
+  const commit = (input: string) => {
+    const parsed = Number(input.trim());
     const isUnlimited = allowUnlimited && parsed === -1;
     const isInRange = Number.isSafeInteger(parsed) && parsed >= minimum && (
       maximum === undefined || parsed <= maximum
@@ -76,10 +76,11 @@ function IntegerSettingInput({
       step="1"
       value={draft}
       onChange={(event) => setDraft(event.target.value)}
-      onBlur={commit}
+      onBlur={(event) => commit(event.currentTarget.value)}
       onKeyDown={(event) => {
         if (event.key === "Enter") event.currentTarget.blur();
         if (event.key === "Escape") {
+          event.currentTarget.value = String(value);
           setDraft(String(value));
           event.currentTarget.blur();
         }
@@ -105,6 +106,9 @@ export function SettingsPanel({
 }: SettingsPanelProps) {
   const [tab, setTab] = useState<SettingsTab>("connection");
   const [showApiKey, setShowApiKey] = useState(false);
+  const systemPromptRef = useRef<HTMLTextAreaElement>(null);
+  const authorNoteRef = useRef<HTMLTextAreaElement>(null);
+  const openingMessageRef = useRef<HTMLTextAreaElement>(null);
   const activeProvider = settings.providerPresets.find(
     (preset) => preset.id === conversationSettings.providerPresetId,
   ) || getActiveProvider(settings);
@@ -118,7 +122,31 @@ export function SettingsPanel({
     key: K,
     value: ConversationSettings[K],
   ) => {
-    onConversationChange({ ...conversationSettings, [key]: value });
+    onConversationChange({ [key]: value });
+  };
+
+  const flushPromptInputs = () => {
+    const changes: Partial<ConversationSettings> = {};
+    const inputs = {
+      systemPrompt: systemPromptRef.current,
+      authorNote: authorNoteRef.current,
+      openingMessage: openingMessageRef.current,
+    };
+    for (const key of Object.keys(inputs) as (keyof typeof inputs)[]) {
+      const input = inputs[key];
+      if (input && input.value !== conversationSettings[key]) changes[key] = input.value;
+    }
+    if (Object.keys(changes).length) onConversationChange(changes);
+  };
+
+  const closeSettings = () => {
+    flushPromptInputs();
+    onClose();
+  };
+
+  const selectTab = (next: SettingsTab) => {
+    flushPromptInputs();
+    setTab(next);
   };
 
   const updateProvider = <K extends keyof ProviderPreset>(
@@ -188,7 +216,7 @@ export function SettingsPanel({
     <>
       <button
         className={`settings-backdrop ${open ? "is-open" : ""}`}
-        onClick={onClose}
+        onClick={closeSettings}
         aria-label="설정 닫기"
         tabIndex={open ? 0 : -1}
       />
@@ -198,19 +226,19 @@ export function SettingsPanel({
             <span className="eyebrow">CONFIGURATION</span>
             <h2>설정</h2>
           </div>
-          <button className="icon-button" type="button" onClick={onClose} aria-label="닫기">
+          <button className="icon-button" type="button" onClick={closeSettings} aria-label="닫기">
             <X size={18} />
           </button>
         </header>
 
         <nav className="settings-tabs" aria-label="설정 분류">
-          <button className={tab === "connection" ? "active" : ""} onClick={() => setTab("connection")}>
+          <button className={tab === "connection" ? "active" : ""} onClick={() => selectTab("connection")}>
             연결
           </button>
-          <button className={tab === "generation" ? "active" : ""} onClick={() => setTab("generation")}>
+          <button className={tab === "generation" ? "active" : ""} onClick={() => selectTab("generation")}>
             생성
           </button>
-          <button className={tab === "mcp" ? "active" : ""} onClick={() => setTab("mcp")}>
+          <button className={tab === "mcp" ? "active" : ""} onClick={() => selectTab("mcp")}>
             MCP
           </button>
         </nav>
@@ -404,9 +432,11 @@ export function SettingsPanel({
               <label className="field-group">
                 <span className="field-label">시스템 프롬프트</span>
                 <textarea
+                  ref={systemPromptRef}
                   className="system-prompt"
                   value={conversationSettings.systemPrompt}
                   onChange={(event) => updateConversation("systemPrompt", event.target.value)}
+                  onCompositionEnd={(event) => updateConversation("systemPrompt", event.currentTarget.value)}
                   placeholder="역할, 규칙, 출력 형식"
                   rows={10}
                 />
@@ -415,8 +445,10 @@ export function SettingsPanel({
               <div className="field-group">
                 <span className="field-label">작성자 메모</span>
                 <textarea
+                  ref={authorNoteRef}
                   value={conversationSettings.authorNote}
                   onChange={(event) => updateConversation("authorNote", event.target.value)}
+                  onCompositionEnd={(event) => updateConversation("authorNote", event.currentTarget.value)}
                   placeholder="대화 중 유지할 지침"
                   rows={5}
                 />
@@ -437,8 +469,10 @@ export function SettingsPanel({
               <div className="field-group">
                 <span className="field-label">시작 메시지</span>
                 <textarea
+                  ref={openingMessageRef}
                   value={conversationSettings.openingMessage}
                   onChange={(event) => updateConversation("openingMessage", event.target.value)}
+                  onCompositionEnd={(event) => updateConversation("openingMessage", event.currentTarget.value)}
                   placeholder="시작 메시지"
                   rows={6}
                 />

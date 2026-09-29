@@ -5,6 +5,11 @@ import {
 } from "../types";
 import { configuredReasoningLevels, normalizeReasoning, resolvePresetReasoning } from "./reasoning";
 
+export function mergeGeneratedConversation(generated: Conversation, latest?: Conversation): Conversation {
+  if (!latest || latest.id !== generated.id) return generated;
+  return { ...latest, messages: generated.messages, updatedAt: generated.updatedAt };
+}
+
 export function normalizeOutputLimit(value: unknown, fallback = DEFAULT_MODEL_PRESET.maxTokens): number {
   return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : fallback;
 }

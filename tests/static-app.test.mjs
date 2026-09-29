@@ -102,7 +102,7 @@ test("keeps manually renamed titles stable after message changes", async () => {
 test("offers conversation preset swapping in the composer", async () => {
   const page = await readFile(new URL("app/page.tsx", root), "utf8");
   assert.match(page, /const swapConversationProvider = useCallback/);
-  assert.match(page, /selectConversationModel\(conversation\.settings, provider, modelPresetId\)/);
+  assert.match(page, /selectConversationModel\(conversationLiveRef\.current\.settings, provider, modelPresetId\)/);
   assert.match(page, /className="composer-preset-select"/);
   assert.match(page, /aria-label="모델 빠른 전환"/);
   assert.match(page, /<optgroup key=\{preset.id\} label=\{preset.name\}>/);
@@ -546,6 +546,7 @@ test("shows elapsed wait time and saves the sent turn before completion", async 
   assert.match(messageList, /formatElapsed\(elapsed\)/);
   assert.match(page, /const recoverableSave = saveConversation\([\s\S]*?messages: recoverableMessages[\s\S]*?false,[\s\S]*?\)\.catch/);
   assert.doesNotMatch(page, /await saveConversation\(\{ \.\.\.workingConversation, messages: baseMessages \}\)/);
-  assert.match(page, /await recoverableSave;\s*await saveConversation\(finished\)/);
+  assert.match(page, /await recoverableSave;\s*const finished = commitGeneratedConversation/);
+  assert.match(page, /if \(finished\) await saveConversation\(finished\)/);
   assert.match(page, /messages:\s*\[\.\.\.baseMessages, finishedAssistant\]/);
 });

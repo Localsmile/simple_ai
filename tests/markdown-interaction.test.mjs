@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 import { Window } from "happy-dom";
-import { act, createElement } from "react";
+import { act, createElement, useState } from "react";
 import { loadTs } from "./load-ts.mjs";
 
 const window = new Window({ url: "https://chat.test/" });
@@ -12,6 +12,10 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const { createRoot } = await import("react-dom/client");
 const { MarkdownView } = loadTs("app/components/MarkdownView.tsx");
 const { MessageList } = loadTs("app/components/MessageList.tsx");
+const { SettingsPanel } = loadTs("app/components/SettingsPanel.tsx");
+const { useLiveState } = loadTs("app/lib/use-live-state.ts");
+const { DEFAULT_SETTINGS } = loadTs("app/types.ts");
+const { conversationSettingsFromApp } = loadTs("app/lib/models.ts");
 after(() => window.happyDOM.close());
 
 function surface(t) {
@@ -31,6 +35,65 @@ function surface(t) {
 function clipboard(writeText) {
   Object.defineProperty(navigator.clipboard, "writeText", { configurable: true, value: writeText });
 }
+
+test("closing settings commits the final prompt composition without another field edit", async (t) => {
+  const { container, render } = surface(t);
+  let latest;
+  function Harness() {
+    const [settings, update, current] = useLiveState(conversationSettingsFromApp(DEFAULT_SETTINGS));
+    const [open, setOpen] = useState(true);
+    latest = current;
+    return createElement(SettingsPanel, {
+      open, conversationId: "chat", settings: DEFAULT_SETTINGS, conversationSettings: settings,
+      mcpConnections: {}, onChange: () => {}, onConnectMcp: () => {},
+      onConversationChange: (changes) => update((previous) => ({ ...previous, ...changes })),
+      onClose: () => setOpen(false),
+    });
+  }
+  await render(createElement(Harness));
+  await act(async () => [...container.querySelectorAll(".settings-tabs button")]
+    .find((button) => button.textContent === "생성").click());
+  const [prompt, note, opening] = container.querySelectorAll("textarea");
+  // The browser can still hold a final IME composition before React receives change.
+  await act(async () => {
+    prompt.value = "최종 시스템 프롬프트";
+    note.value = "최종 작성자 메모";
+    opening.value = "최종 시작 메시지";
+    container.querySelector('[aria-label="닫기"]').click();
+  });
+  assert.equal(latest.current.systemPrompt, "최종 시스템 프롬프트");
+  assert.equal(latest.current.authorNote, "최종 작성자 메모");
+  assert.equal(latest.current.openingMessage, "최종 시작 메시지");
+  assert.equal(container.querySelector(".settings-panel").getAttribute("aria-hidden"), "true");
+});
+
+test("batched prompt and numeric blur patches preserve each other before the next render", async (t) => {
+  const { container, render } = surface(t);
+  let latest;
+  let update;
+  function Harness() {
+    const [settings, setSettings, current] = useLiveState(conversationSettingsFromApp(DEFAULT_SETTINGS));
+    latest = current;
+    update = (changes) => setSettings((previous) => ({ ...previous, ...changes }));
+    return createElement(SettingsPanel, {
+      open: true, conversationId: "chat", settings: DEFAULT_SETTINGS, conversationSettings: settings,
+      mcpConnections: {}, onChange: () => {}, onConnectMcp: () => {}, onClose: () => {},
+      onConversationChange: update,
+    });
+  }
+  await render(createElement(Harness));
+  await act(async () => [...container.querySelectorAll(".settings-tabs button")]
+    .find((button) => button.textContent === "생성").click());
+  const depth = container.querySelector('input[type="number"]');
+  await act(async () => {
+    update({ systemPrompt: "new prompt", authorNote: "new note" });
+    depth.value = "4";
+    depth.dispatchEvent(new window.FocusEvent("focusout", { bubbles: true }));
+  });
+  assert.equal(latest.current.systemPrompt, "new prompt");
+  assert.equal(latest.current.authorNote, "new note");
+  assert.equal(latest.current.authorNoteDepth, 4);
+});
 
 test("streamed code keeps the same copy button and copies the click-time text", async (t) => {
   const { container, render } = surface(t);
