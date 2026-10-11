@@ -84,10 +84,12 @@ test("preflight permits Pages and loopback, rejects untrusted and opaque origins
   for (const value of [origin, "http://localhost:5173", "http://127.0.0.1:5173", "http://[::1]:5173"]) {
     const response = await call(request({ method: "OPTIONS", headers: { Origin: value,
       "Access-Control-Request-Method": "POST",
-      "Access-Control-Request-Headers": "authorization, Content-Type, x-upstream-url, x-opencode-session, x-opencode-client" } }));
+      "Access-Control-Request-Headers": "authorization, Content-Type, x-api-key, anthropic-version, x-upstream-url, x-opencode-session, x-opencode-client" } }));
     assert.equal(response.status, 204);
     assert.equal(response.headers.get("Access-Control-Allow-Origin"), value);
     assert.match(response.headers.get("Access-Control-Allow-Headers"), /Authorization/);
+    assert.match(response.headers.get("Access-Control-Allow-Headers"), /X-Api-Key/i);
+    assert.match(response.headers.get("Access-Control-Allow-Headers"), /anthropic-version/i);
     assert.match(response.headers.get("Access-Control-Allow-Headers"), /X-Upstream-Url/);
     assert.match(response.headers.get("Access-Control-Allow-Headers"), /X-OpenCode-Session/);
     assert.equal(response.headers.has("Access-Control-Allow-Credentials"), false);
@@ -128,13 +130,16 @@ test("request and SSE bodies stream unchanged; cookies and unrelated headers are
     return new Response(stream, { headers: { "Content-Type": "text/event-stream", "Set-Cookie": "private=value",
       "Access-Control-Allow-Origin": "*", "X-Request-Id": "test-request" } });
   });
-  const req = request({ headers: { Cookie: "session=private", "X-Target-Url": "https://other.test", "CF-Connecting-IP": "192.0.2.1" } });
+  const req = request({ headers: { Cookie: "session=private", "X-Target-Url": "https://other.test",
+    "X-Api-Key": "test-key", "anthropic-version": "2023-06-01", "CF-Connecting-IP": "192.0.2.1" } });
   const response = await call(req);
   assert.equal(captured.url, upstreamUrl);
   assert.equal(captured.init.body, req.body);
   assert.equal(captured.init.signal, req.signal);
   assert.equal(captured.init.redirect, "manual");
   assert.equal(captured.init.headers.Authorization, "Bearer test-key");
+  assert.equal(captured.init.headers["X-Api-Key"], "test-key");
+  assert.equal(captured.init.headers["anthropic-version"], "2023-06-01");
   for (const name of ["Cookie", "Origin", "X-Target-Url", UPSTREAM_HEADER]) assert.equal(captured.init.headers[name], undefined);
   assert.deepEqual(rateKeys, ["simple-ai-cors:192.0.2.1"]);
   assert.equal(response.headers.get("Cache-Control"), "no-store");
@@ -267,9 +272,43 @@ test("base endpoints negotiate standard API shapes without model-name rules and 
   assert.equal(calls.length, 4);
 });
 
+test("missing credential-header errors negotiate protocol paths; invalid keys stop immediately", async () => {
+  const calls = [];
+  const autoProvider = { ...provider, baseUrl: "https://api.example.com/v1", model: "generic-messages-model" };
+  const { requestCompletion } = loadTs("app/lib/api.ts", { fetch: async (url, init) => {
+    const target = init.headers.get(UPSTREAM_HEADER);
+    calls.push({ target, headers: init.headers });
+    if (!target.endsWith("/messages")) {
+      return Response.json({ error: { message: "API missing" } }, { status: 401 });
+    }
+    assert.equal(init.headers.get("x-api-key"), "test-key");
+    assert.equal(init.headers.get("anthropic-version"), "2023-06-01");
+    assert.equal(init.headers.get("Authorization"), "Bearer test-key");
+    return Response.json({ id: "msg_auth", model: autoProvider.model, stop_reason: "end_turn",
+      content: [{ type: "text", text: "MESSAGE_OK" }] });
+  } });
+  const result = await requestCompletion({ settings: { ...DEFAULT_SETTINGS, stream: false }, provider: autoProvider,
+    messages: [{ role: "user", content: "hello" }] });
+  assert.equal(result.content, "MESSAGE_OK");
+  assert.deepEqual(calls.map((call) => new URL(call.target).pathname), [
+    "/v1/chat/completions", "/v1/responses", "/v1/messages",
+  ]);
+
+  let invalidKeyCalls = 0;
+  const invalidProvider = { ...autoProvider, model: "invalid-key-model" };
+  const invalid = loadTs("app/lib/api.ts", { fetch: async () => {
+    invalidKeyCalls += 1;
+    return Response.json({ error: { message: "Invalid API key" } }, { status: 401 });
+  } }).requestCompletion;
+  await assert.rejects(invalid({ settings: { ...DEFAULT_SETTINGS, stream: false }, provider: invalidProvider,
+    messages: [{ role: "user", content: "hello" }] }), /API 401: Invalid API key/);
+  assert.equal(invalidKeyCalls, 1);
+});
+
 test("Messages endpoints preserve streaming thinking, tools, images and usage", async () => {
   const endpoint = "https://api.example.com/v1/messages";
   let sent;
+  let sentHeaders;
   const events = [
     { type: "message_start", message: { id: "msg_1", model: "messages-model", usage: { input_tokens: 5 } } },
     { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
@@ -288,6 +327,7 @@ test("Messages endpoints preserve streaming thinking, tools, images and usage", 
   const { requestCompletion, serializeCompletionRequest } = loadTs("app/lib/api.ts", {
     fetch: async (url, init) => {
       sent = JSON.parse(init.body);
+      sentHeaders = init.headers;
       return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
         { headers: { "Content-Type": "text/event-stream" } });
     },
@@ -299,6 +339,9 @@ test("Messages endpoints preserve streaming thinking, tools, images and usage", 
       { type: "text", text: "hello" }, { type: "image_url", image_url: { url: "data:image/webp;base64,AA==" } },
     ] }], tools: [{ type: "function", function: { name: "lookup", parameters: { type: "object" } } }],
     onDelta: (value) => deltas.push(value), onReasoningDelta: (value) => thinking.push(value) });
+  assert.equal(sentHeaders.get("Authorization"), "Bearer test-key");
+  assert.equal(sentHeaders.get("x-api-key"), "test-key");
+  assert.equal(sentHeaders.get("anthropic-version"), "2023-06-01");
   assert.equal(sent.system, "system");
   assert.equal(sent.messages[0].content[1].source.media_type, "image/webp");
   assert.equal(sent.tools[0].input_schema.type, "object");

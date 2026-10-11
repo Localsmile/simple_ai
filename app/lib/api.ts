@@ -241,12 +241,14 @@ function readContent(value: unknown): string {
 export class ApiRequestError extends Error {
   readonly status: number;
   readonly requestBytes: number;
+  readonly credentialHeaderMissing: boolean;
 
-  constructor(status: number, message: string, requestBytes: number) {
+  constructor(status: number, message: string, requestBytes: number, credentialHeaderMissing = false) {
     super(message);
     this.name = "ApiRequestError";
     this.status = status;
     this.requestBytes = requestBytes;
+    this.credentialHeaderMissing = credentialHeaderMissing;
   }
 }
 
@@ -369,6 +371,14 @@ function mergeToolCalls(
   }
 }
 
+function isMissingCredentialHeader(body: string): boolean {
+  const normalized = body.replace(/[_-]+/g, " ");
+  const credential = "(?:(?:x\\s+)?api(?:\\s+key)?|authorization(?:\\s+header)?|authentication(?:\\s+header)?|credentials?)";
+  const missing = "(?:missing|required|not provided|not found|absent)";
+  return new RegExp(`\\b${credential}\\b.{0,48}\\b${missing}\\b`, "i").test(normalized)
+    || new RegExp(`\\b${missing}\\b.{0,48}\\b${credential}\\b`, "i").test(normalized);
+}
+
 function apiError(status: number, body: string, requestBytes: number): ApiRequestError {
   if (/^\s*(?:<!doctype\s+html|<html)\b/i.test(body)) {
     return new ApiRequestError(status, `API ${status}: HTML 응답 · 엔드포인트 확인`, requestBytes);
@@ -390,6 +400,7 @@ function apiError(status: number, body: string, requestBytes: number): ApiReques
     status,
     `API ${status}: ${message.slice(0, 1200)}`,
     requestBytes,
+    status === 401 && isMissingCredentialHeader(body),
   );
 }
 
@@ -1032,7 +1043,12 @@ async function requestCompletionWithTarget({
   const headers = new Headers({ "Content-Type": "application/json" });
   if (useProxy) headers.set(UPSTREAM_HEADER, target.url);
   if (provider.apiKey.trim()) {
-    headers.set("Authorization", `Bearer ${provider.apiKey.trim()}`);
+    const apiKey = provider.apiKey.trim();
+    headers.set("Authorization", `Bearer ${apiKey}`);
+    if (api === "messages") {
+      headers.set("x-api-key", apiKey);
+      headers.set("anthropic-version", "2023-06-01");
+    }
   }
   if (sessionId && isOpenCodeTarget(target.url)) {
     headers.set(OPENCODE_SESSION_HEADER, sessionId.slice(0, 200));
@@ -1222,7 +1238,8 @@ async function requestCompletionOnce(
       return result;
     } catch (error) {
       if (imageLimitFromError(error) !== undefined) throw error;
-      if (!(error instanceof ApiRequestError) || !NEGOTIABLE_STATUSES.has(error.status)) throw error;
+      if (!(error instanceof ApiRequestError)
+        || (!NEGOTIABLE_STATUSES.has(error.status) && !error.credentialHeaderMissing)) throw error;
       firstError ||= error;
     }
   }

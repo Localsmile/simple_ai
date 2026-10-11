@@ -55,7 +55,7 @@ export default {
       const method = request.headers.get("Access-Control-Request-Method");
       const requestedHeaders = (request.headers.get("Access-Control-Request-Headers") || "")
         .toLowerCase().split(",").map((value) => value.trim()).filter(Boolean);
-      const allowedHeaders = ["authorization", "content-type", UPSTREAM_HEADER,
+      const allowedHeaders = ["authorization", "content-type", "x-api-key", "anthropic-version", UPSTREAM_HEADER,
         OPENCODE_SESSION_HEADER, OPENCODE_CLIENT_HEADER].map((name) => name.toLowerCase());
       if (method !== "POST" || requestedHeaders.some((name) => !allowedHeaders.includes(name))) {
         return errorResponse(403, "Preflight not allowed", origin);
@@ -63,7 +63,7 @@ export default {
       const headers = responseHeaders(origin);
       headers.set("Access-Control-Allow-Methods", "POST, OPTIONS");
       headers.set("Access-Control-Allow-Headers",
-        `Authorization, Content-Type, ${UPSTREAM_HEADER}, ${OPENCODE_SESSION_HEADER}, ${OPENCODE_CLIENT_HEADER}`);
+        `Authorization, Content-Type, X-Api-Key, anthropic-version, ${UPSTREAM_HEADER}, ${OPENCODE_SESSION_HEADER}, ${OPENCODE_CLIENT_HEADER}`);
       headers.set("Access-Control-Max-Age", "86400");
       headers.set("Vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers");
       return new Response(null, { status: 204, headers });
@@ -78,8 +78,13 @@ export default {
     }
     if (request.headers.has("Content-Encoding")) return errorResponse(415, "Content-Encoding not supported", origin);
     const authorization = request.headers.get("Authorization") || "";
+    const apiKey = request.headers.get("X-Api-Key") || "";
+    const anthropicVersion = request.headers.get("anthropic-version") || "";
     if (authorization && (!/^Bearer [^\s]+$/i.test(authorization) || authorization.length > 4096)) {
       return errorResponse(401, "Invalid Authorization header", origin);
+    }
+    if (apiKey.length > 4096 || anthropicVersion.length > 100) {
+      return errorResponse(400, "Invalid API header", origin);
     }
     if (!request.body) return errorResponse(400, "Request body required", origin);
     const openCodeSession = request.headers.get(OPENCODE_SESSION_HEADER) || "";
@@ -116,6 +121,8 @@ export default {
         method: "POST",
         headers: {
           ...(authorization ? { "Authorization": authorization } : {}),
+          ...(apiKey ? { "X-Api-Key": apiKey } : {}),
+          ...(anthropicVersion ? { "anthropic-version": anthropicVersion } : {}),
           ...(target.hostname === "opencode.ai" && openCodeSession
             ? { [OPENCODE_SESSION_HEADER]: openCodeSession } : {}),
           ...(target.hostname === "opencode.ai" && openCodeClient
